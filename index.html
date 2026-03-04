@@ -789,7 +789,7 @@ function App(){
       {screen==="schedule"&&<EditSchedule students={students} onSave={handleSaveSchedule} onBack={()=>go("home")}/>}
       {screen==="addStudent"&&<AddStudent onSave={handleAddStudent} onBack={()=>go("home")} existingNames={students.map(s=>s.name)}/>}
       {screen==="studentPin"&&selected&&<PinScreen student={selected} isFirstTime={selected.pin===null} onSuccess={handlePinSuccess} onBack={()=>{go("home");setSelected(null);}}/>}
-      {screen==="studentInfo"&&currentStudent&&<StudentInfo student={currentStudent} records={records} onCheckin={handleCheckin} onBack={()=>go("studentPin")}/>}
+      {screen==="studentInfo"&&currentStudent&&<StudentInfo student={currentStudent} records={records} onCheckin={handleCheckin} onBack={()=>{go("home");setSelected(null);}}/>}
       {screen==="success"&&<SuccessScreen/>}
       {screen==="records"&&<RecordsScreen records={records} onBack={()=>{go("home");setTab("home");}}/>}
       {screen==="settings"&&<SettingsScreen students={students} records={records} onReload={handleReload} showToast={showToast}/>}
