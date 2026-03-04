@@ -29,7 +29,7 @@ const {useState,useRef,useEffect}=React;
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  ★ 部署後把 Apps Script 的網址貼在這裡 ★
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-const GAS_URL = "https://script.google.com/macros/s/AKfycbyGgnfFFeO-7gtxgs4lTFDMak2ypdSniq-CGPcL-l3E5Zk4fO6NVI5ZMOeLQaUg8rRFhA/exec";
+const GAS_URL = "請貼上你的Apps Script網址";
 
 const LS_S="coach_students", LS_R="coach_records";
 function lsGet(k,fb){try{const v=localStorage.getItem(k);return v?JSON.parse(v):fb;}catch{return fb;}}
@@ -43,7 +43,12 @@ async function gasGet(action){
 }
 async function gasPost(body){
   if(!hasGAS()) return null;
-  try{const r=await fetch(GAS_URL,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body),redirect:"follow"});return await r.json();}catch{return null;}
+  try{
+    // GAS requires no-cors or specific handling; use GET with encoded payload for reliability
+    const encoded=encodeURIComponent(JSON.stringify(body));
+    const r=await fetch(GAS_URL+"?payload="+encoded+"&action=post",{method:"GET",redirect:"follow"});
+    return await r.json();
+  }catch{return null;}
 }
 
 function getTaiwanTime(){
@@ -635,8 +640,8 @@ function SuccessScreen({students,records}){
 function App(){
   const [students,setStudents]=useState(()=>lsGet(LS_S,[]));
   const [records,setRecords]=useState(()=>lsGet(LS_R,[]));
-  const [loading,setLoading]=useState(hasGAS());
   const [syncing,setSyncing]=useState(false);
+  const [syncDone,setSyncDone]=useState(false);
   const [screen,setScreen]=useState("home");
   const [tab,setTab]=useState("home");
   const [selected,setSelected]=useState(null);
@@ -645,14 +650,18 @@ function App(){
   const go=setScreen;
   const showToast=(msg,type="ok")=>setToast({msg,type});
 
-  // 啟動時從雲端載入
+  // 啟動時背景靜默同步（先顯示本機資料，不擋畫面）
   useEffect(()=>{
-    if(!hasGAS()){setLoading(false);return;}
+    if(!hasGAS()) return;
+    setSyncing(true);
     (async()=>{
-      const [s,r]=await Promise.all([gasGet("getStudents"),gasGet("getRecords")]);
-      if(s&&Array.isArray(s)){setStudents(s);lsSet(LS_S,s);}
-      if(r&&Array.isArray(r)){setRecords(r);lsSet(LS_R,r);}
-      setLoading(false);
+      try{
+        const [s,r]=await Promise.all([gasGet("getStudents"),gasGet("getRecords")]);
+        if(s&&Array.isArray(s)){setStudents(s);lsSet(LS_S,s);}
+        if(r&&Array.isArray(r)){setRecords(r);lsSet(LS_R,r);}
+      }catch(e){}
+      setSyncing(false);
+      setSyncDone(true);
     })();
   },[]);
 
@@ -729,7 +738,7 @@ function App(){
   const coachStudent=coachViewing?students.find(s=>s.id===coachViewing.id):null;
   const showTabs=["home","records","settings"].includes(screen);
 
-  if(loading) return <Loading msg="從雲端載入資料…"/>;
+  // 不擋畫面，背景同步
 
   return(
     <div style={{position:"relative"}}>
