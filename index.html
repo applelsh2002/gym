@@ -181,17 +181,17 @@ function Field({label,value,onChange,type="text",placeholder=""}){
     </div>
   );
 }
-function PinDot({filled}){return <div style={{width:13,height:13,borderRadius:"50%",background:filled?"#1A1A1A":"transparent",border:"2px solid "+(filled?"#1A1A1A":"#CCC"),transition:"background 0.1s"}}/>;}
+function PinDot({filled}){return <div style={{width:20,height:20,borderRadius:"50%",background:filled?"#1A1A1A":"transparent",border:"3px solid "+(filled?"#1A1A1A":"#CCC"),transition:"background 0.1s"}}/>;}
 function NumPad({onPress}){
   const keys=["1","2","3","4","5","6","7","8","9","","0","⌫"];
   return(
-    <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10,width:240}}>
+    <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12,width:300}}>
       {keys.map((k,i)=>(
         <button key={i} onClick={()=>k&&onPress(k)}
           onMouseDown={e=>{if(k)e.currentTarget.style.background="#E0E0E0"}}
           onMouseUp={e=>{if(k)e.currentTarget.style.background="#F5F5F5"}}
           onMouseLeave={e=>{e.currentTarget.style.background=k?"#F5F5F5":"transparent"}}
-          style={{height:56,borderRadius:13,background:k?"#F5F5F5":"transparent",border:k?"1px solid #E8E8E8":"none",color:"#1A1A1A",fontSize:20,cursor:k?"pointer":"default",fontWeight:600,transition:"background 0.1s"}}>{k}</button>
+          style={{height:72,borderRadius:16,background:k?"#F5F5F5":"transparent",border:k?"1px solid #E8E8E8":"none",color:"#1A1A1A",fontSize:28,cursor:k?"pointer":"default",fontWeight:600,transition:"background 0.1s"}}>{k}</button>
       ))}
     </div>
   );
@@ -536,16 +536,16 @@ function PinScreen({student,isFirstTime,onSuccess,onBack}){
     <div style={{minHeight:"100vh",background:"#fff",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center"}}>
       <button onClick={onBack} style={{position:"absolute",top:28,left:20,background:"none",border:"none",color:"#AAA",fontSize:14,cursor:"pointer"}}>← 返回</button>
       <div style={{textAlign:"center",marginBottom:44}}>
-        <div style={{width:68,height:68,borderRadius:20,background:"#F5F5F5",display:"flex",alignItems:"center",justifyContent:"center",fontSize:30,fontWeight:700,color:"#555",margin:"0 auto 20px"}}>{student.name[0]}</div>
+        <div style={{width:84,height:84,borderRadius:24,background:"#F5F5F5",display:"flex",alignItems:"center",justifyContent:"center",fontSize:38,fontWeight:700,color:"#555",margin:"0 auto 24px"}}>{student.name[0]}</div>
         {isFirstTime&&<div style={{fontSize:10,color:"#F9A825",letterSpacing:2,fontWeight:700,marginBottom:6}}>首次設定</div>}
-        <div style={{fontSize:21,fontWeight:800,color:"#1A1A1A"}}>{titles[step][0]}</div>
-        <div style={{fontSize:14,color:"#AAA",marginTop:6}}>{titles[step][1]}</div>
+        <div style={{fontSize:26,fontWeight:800,color:"#1A1A1A"}}>{titles[step][0]}</div>
+        <div style={{fontSize:17,color:"#AAA",marginTop:8}}>{titles[step][1]}</div>
       </div>
-      <div style={{display:"flex",gap:16,marginBottom:12,animation:shake?"shake 0.4s ease":"none"}}>
+      <div style={{display:"flex",gap:22,marginBottom:16,animation:shake?"shake 0.4s ease":"none"}}>
         {[0,1,2,3].map(i=><PinDot key={i} filled={i<display.length}/>)}
       </div>
       <div style={{height:26,display:"flex",alignItems:"center",marginBottom:24}}>
-        {error&&<span style={{color:"#D32F2F",fontSize:13,fontWeight:600}}>{error}</span>}
+        {error&&<span style={{color:"#D32F2F",fontSize:16,fontWeight:600}}>{error}</span>}
       </div>
       <NumPad onPress={handleKey}/>
     </div>
