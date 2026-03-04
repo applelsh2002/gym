@@ -49,6 +49,14 @@ function gasSync(body){
   fetch(GAS_URL+"?action=post&payload="+encoded,{redirect:"follow"}).catch(()=>{});
 }
 
+// ── PIN 雜湊（SHA-256，不可逆）────────────────────────────────
+async function hashPin(pin){
+  const buf=await crypto.subtle.digest("SHA-256",new TextEncoder().encode("coach_pin_salt_"+pin));
+  return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,"0")).join("").slice(0,16);
+}
+// 判斷是否已是 hash（16位hex）
+const isHashed=v=>v&&/^[0-9a-f]{16}$/.test(v);
+
 function getTaiwanTime(){
   const d=new Date();
   const tw=new Date(d.toLocaleString("en-US",{timeZone:"Asia/Taipei"}));
@@ -486,11 +494,18 @@ function PinScreen({student,isFirstTime,onSuccess,onBack}){
       setTimeout(()=>{
         if(step==="set"){setStep("conf");setConf("");}
         else if(step==="conf"){
-          if(next===pinRef.current) onSuccess(pinRef.current);
-          else doShake("兩次 PIN 不一致，請重設");
+          if(next===pinRef.current){
+            hashPin(pinRef.current).then(h=>onSuccess(h));
+          }else doShake("兩次 PIN 不一致，請重設");
+          return;
         }else{
-          if(next===student.pin) onSuccess(null);
-          else doShake("密碼錯誤，請重試");
+          hashPin(next).then(h=>{
+            const stored=student.pin;
+            // 支援舊版明文 PIN 與新版 hash 兩種格式
+            if(isHashed(stored)?h===stored:next===stored) onSuccess(null);
+            else doShake("密碼錯誤，請重試");
+          });
+          return; // 非同步，不繼續執行
         }
       },120);
     }
