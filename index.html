@@ -50,7 +50,10 @@ function gasSync(body){
 }
 
 function getTaiwanTime(){
-  return new Date().toLocaleString("zh-TW",{timeZone:"Asia/Taipei",year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:false}).replace(/\//g,"-");
+  const d=new Date();
+  const tw=new Date(d.toLocaleString("en-US",{timeZone:"Asia/Taipei"}));
+  const pad=n=>String(n).padStart(2,"0");
+  return `${tw.getFullYear()}/${pad(tw.getMonth()+1)}/${pad(tw.getDate())} ${pad(tw.getHours())}:${pad(tw.getMinutes())}:${pad(tw.getSeconds())}`;
 }
 const getTotalRemaining=s=>s.contracts.reduce((sum,c)=>sum+Math.max(0,c.total-c.used),0);
 const remColor=r=>r<=0?"#9E9E9E":r<=3?"#D32F2F":"#2E7D32";
