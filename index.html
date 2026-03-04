@@ -26,9 +26,25 @@
 <script type="text/babel">
 const {useState,useRef,useEffect}=React;
 
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  ★ 部署後把 Apps Script 的網址貼在這裡 ★
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+const GAS_URL = "請貼上你的Apps Script網址";
+
 const LS_S="coach_students", LS_R="coach_records";
 function lsGet(k,fb){try{const v=localStorage.getItem(k);return v?JSON.parse(v):fb;}catch{return fb;}}
 function lsSet(k,v){try{localStorage.setItem(k,JSON.stringify(v));}catch{}}
+
+const hasGAS = ()=> GAS_URL && !GAS_URL.includes("請貼上");
+
+async function gasGet(action){
+  if(!hasGAS()) return null;
+  try{const r=await fetch(GAS_URL+"?action="+action);return await r.json();}catch{return null;}
+}
+async function gasPost(body){
+  if(!hasGAS()) return null;
+  try{const r=await fetch(GAS_URL,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body),redirect:"follow"});return await r.json();}catch{return null;}
+}
 
 function getTaiwanTime(){
   return new Date().toLocaleString("zh-TW",{timeZone:"Asia/Taipei",year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:false}).replace(/\//g,"-");
@@ -38,14 +54,60 @@ const remColor=r=>r<=0?"#9E9E9E":r<=3?"#D32F2F":"#2E7D32";
 const remBg=r=>r<=0?"#F5F5F5":r<=3?"#FFEBEE":"#E8F5E9";
 const isEng=n=>/^[A-Za-z]/.test(n);
 
-function doExport(students,records){
-  const blob=new Blob([JSON.stringify({exportedAt:getTaiwanTime(),students,records},null,2)],{type:"application/json"});
+// ── Excel 匯出 ────────────────────────────────────────────────
+function exportExcel(students,records){
+  const esc=v=>{
+    if(v===null||v===undefined) return "";
+    const s=String(v);
+    return s.includes(",")||s.includes('"')||s.includes("\n") ? `"${s.replace(/"/g,'""')}"` : s;
+  };
+
+  // 學員工作表
+  let csv1="學員ID,姓名,PIN碼,今日排課,合約數,剩餘總堂數\n";
+  students.forEach(s=>{
+    csv1+=[s.id,s.name,s.pin||"(未設定)",s.scheduledToday?"是":"否",s.contracts.length,getTotalRemaining(s)].map(esc).join(",")+"\n";
+  });
+
+  // 合約工作表
+  let csv2="學員ID,學員姓名,合約ID,總堂數,已用,剩餘,繳費日期,備注\n";
+  students.forEach(s=>{
+    s.contracts.forEach(c=>{
+      csv2+=[s.id,s.name,c.id,c.total,c.used,Math.max(0,c.total-c.used),c.paidDate,c.note||""].map(esc).join(",")+"\n";
+    });
+  });
+
+  // 簽到工作表
+  let csv3="學員ID,學員姓名,簽到時間\n";
+  records.forEach(r=>{
+    csv3+=[r.studentId,r.studentName,r.timestamp].map(esc).join(",")+"\n";
+  });
+
+  // 合併成多 sheet 的 HTML 表格（偽 Excel）並下載為 .xls（Excel 可讀）
+  const html=`<html><head><meta charset="UTF-8"></head><body>
+<table><caption>學員資料</caption>
+<tr><th>學員ID</th><th>姓名</th><th>PIN碼</th><th>今日排課</th><th>合約數</th><th>剩餘總堂數</th></tr>
+${students.map(s=>`<tr><td>${s.id}</td><td>${s.name}</td><td>${s.pin||"(未設定)"}</td><td>${s.scheduledToday?"是":"否"}</td><td>${s.contracts.length}</td><td>${getTotalRemaining(s)}</td></tr>`).join("")}
+</table><br/>
+<table><caption>合約紀錄</caption>
+<tr><th>學員ID</th><th>學員姓名</th><th>合約ID</th><th>總堂數</th><th>已用</th><th>剩餘</th><th>繳費日期</th><th>備注</th></tr>
+${students.flatMap(s=>s.contracts.map(c=>`<tr><td>${s.id}</td><td>${s.name}</td><td>${c.id}</td><td>${c.total}</td><td>${c.used}</td><td>${Math.max(0,c.total-c.used)}</td><td>${c.paidDate}</td><td>${c.note||""}</td></tr>`)).join("")}
+</table><br/>
+<table><caption>簽到紀錄</caption>
+<tr><th>學員ID</th><th>學員姓名</th><th>簽到時間</th></tr>
+${records.map(r=>`<tr><td>${r.studentId}</td><td>${r.studentName}</td><td>${r.timestamp}</td></tr>`).join("")}
+</table>
+</body></html>`;
+
+  const blob=new Blob(["\ufeff"+html],{type:"application/vnd.ms-excel;charset=utf-8"});
   const url=URL.createObjectURL(blob);
   const a=document.createElement("a");
-  a.href=url; a.download=`簽到備份_${getTaiwanTime().replace(/[: ]/g,"-")}.json`; a.click();
+  a.href=url;
+  a.download=`簽到備份_${getTaiwanTime().replace(/[: ]/g,"-")}.xls`;
+  a.click();
   URL.revokeObjectURL(url);
 }
 
+// ── SVG Icons ─────────────────────────────────────────────────
 const Pencil=({size=16,color="#AAA"})=>(
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
     <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
@@ -88,7 +150,7 @@ function Modal({title,children,onClose}){
   );
 }
 function Btn({children,onClick,variant="dark",full=false,style:s={},disabled=false}){
-  const v={dark:{background:"#1A1A1A",color:"#fff",padding:"13px 18px"},light:{background:"#F2F2F2",color:"#555",padding:"13px 18px"},red:{background:"#FFEBEE",color:"#D32F2F",padding:"13px 18px"}};
+  const v={dark:{background:"#1A1A1A",color:"#fff",padding:"13px 18px"},light:{background:"#F2F2F2",color:"#555",padding:"13px 18px"},red:{background:"#FFEBEE",color:"#D32F2F",padding:"13px 18px"},green:{background:"#E8F5E9",color:"#2E7D32",padding:"13px 18px"}};
   return <button onClick={disabled?undefined:onClick} onMouseDown={e=>{if(!disabled)e.currentTarget.style.opacity="0.7"}} onMouseUp={e=>{if(!disabled)e.currentTarget.style.opacity="1"}} style={{border:"none",borderRadius:13,fontSize:15,fontWeight:700,cursor:disabled?"not-allowed":"pointer",transition:"opacity 0.15s",width:full?"100%":undefined,opacity:disabled?0.5:1,...v[variant],...s}}>{children}</button>;
 }
 function Field({label,value,onChange,type="text",placeholder=""}){
@@ -104,12 +166,12 @@ function NumPad({onPress}){
   const keys=["1","2","3","4","5","6","7","8","9","","0","⌫"];
   return(
     <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10,width:240}}>
-      {keys.map((k,i)=>(
-        <button key={i} onClick={()=>k&&onPress(k)} onMouseDown={e=>{if(k)e.currentTarget.style.background="#E8E8E8"}} onMouseUp={e=>{if(k)e.currentTarget.style.background="#F5F5F5"}}
-          style={{height:56,borderRadius:13,background:k?"#F5F5F5":"transparent",border:k?"1px solid #E8E8E8":"none",color:"#1A1A1A",fontSize:20,cursor:k?"pointer":"default",fontWeight:600}}>{k}</button>
-      ))}
+      {keys.map((k,i)=>(<button key={i} onClick={()=>k&&onPress(k)} onMouseDown={e=>{if(k)e.currentTarget.style.background="#E8E8E8"}} onMouseUp={e=>{if(k)e.currentTarget.style.background="#F5F5F5"}} style={{height:56,borderRadius:13,background:k?"#F5F5F5":"transparent",border:k?"1px solid #E8E8E8":"none",color:"#1A1A1A",fontSize:20,cursor:k?"pointer":"default",fontWeight:600}}>{k}</button>))}
     </div>
   );
+}
+function Loading({msg="載入中…"}){
+  return <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#fff"}}><div style={{textAlign:"center"}}><div style={{width:32,height:32,border:"3px solid #EEE",borderTop:"3px solid #1A1A1A",borderRadius:"50%",animation:"spin 0.8s linear infinite",margin:"0 auto 16px"}}/><div style={{fontSize:14,color:"#AAA"}}>{msg}</div></div></div>;
 }
 function BottomTabs({active,onChange}){
   return(
@@ -124,8 +186,8 @@ function BottomTabs({active,onChange}){
   );
 }
 
-// ── Coach Home ─────────────────────────────────────────────────────────────────
-function CoachHome({students,onSignIn,onEdit,onAdd,onEditSchedule}){
+// ── Coach Home ─────────────────────────────────────────────────
+function CoachHome({students,onSignIn,onEdit,onAdd,onEditSchedule,syncing}){
   const [search,setSearch]=useState("");
   const sorted=[...students].filter(s=>s.name.includes(search)).sort((a,b)=>{
     if(a.scheduledToday!==b.scheduledToday) return b.scheduledToday-a.scheduledToday;
@@ -139,7 +201,12 @@ function CoachHome({students,onSignIn,onEdit,onAdd,onEditSchedule}){
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
           <div>
             <div style={{fontSize:11,letterSpacing:2,color:"#CCC",marginBottom:3}}>COACH DASHBOARD</div>
-            <div style={{fontSize:24,fontWeight:900,color:"#1A1A1A"}}>學員管理</div>
+            <div style={{display:"flex",alignItems:"center",gap:10}}>
+              <div style={{fontSize:24,fontWeight:900,color:"#1A1A1A"}}>學員管理</div>
+              {syncing&&<div style={{width:14,height:14,border:"2px solid #EEE",borderTop:"2px solid #1A1A1A",borderRadius:"50%",animation:"spin 0.8s linear infinite"}}/>}
+              {!syncing&&hasGAS()&&<div style={{fontSize:10,background:"#E8F5E9",color:"#2E7D32",padding:"2px 8px",borderRadius:10,fontWeight:700}}>● 雲端同步</div>}
+              {!hasGAS()&&<div style={{fontSize:10,background:"#FFF9C4",color:"#F57F17",padding:"2px 8px",borderRadius:10,fontWeight:700}}>本機模式</div>}
+            </div>
           </div>
           <div style={{display:"flex",gap:8}}>
             <button onClick={onEditSchedule} style={{background:"#F2F2F2",border:"none",color:"#555",padding:"9px 13px",borderRadius:11,fontSize:12,fontWeight:700,cursor:"pointer"}}>今日排課</button>
@@ -194,30 +261,23 @@ function CoachHome({students,onSignIn,onEdit,onAdd,onEditSchedule}){
   );
 }
 
-// ── Coach Detail ───────────────────────────────────────────────────────────────
+// ── Coach Detail ───────────────────────────────────────────────
 function CoachDetail({student,records,onBack,onUpdate,onDelete,showToast}){
   const [showAdd,setShowAdd]=useState(false);
   const [showResetPin,setShowResetPin]=useState(false);
   const [showDel,setShowDel]=useState(false);
   const [editName,setEditName]=useState(student.name);
   const [editingName,setEditingName]=useState(false);
-  const [saving,setSaving]=useState(false);
   const [form,setForm]=useState({total:"",paidDate:new Date().toISOString().split("T")[0],note:""});
   const idRef=useRef(Date.now());
   const totalRem=getTotalRemaining(student);
   const myRecords=records.filter(r=>String(r.studentId)===String(student.id)).slice(-5).reverse();
-
   const save=updated=>{onUpdate(updated);showToast("✅ 已儲存");};
   const handleAddContract=()=>{
     if(!form.total||Number(form.total)<1) return;
-    const newC={id:idRef.current++,total:Number(form.total),used:0,paidDate:form.paidDate,note:form.note};
-    save({...student,contracts:[...student.contracts,newC]});
-    setForm({total:"",paidDate:new Date().toISOString().split("T")[0],note:""});
-    setShowAdd(false);
+    save({...student,contracts:[...student.contracts,{id:idRef.current++,total:Number(form.total),used:0,paidDate:form.paidDate,note:form.note}]});
+    setForm({total:"",paidDate:new Date().toISOString().split("T")[0],note:""});setShowAdd(false);
   };
-  const handleResetPin=()=>{setShowResetPin(false);save({...student,pin:null});};
-  const handleDelete=()=>{onDelete(student.id);showToast("已刪除學員","warn");onBack();};
-
   return(
     <div style={{minHeight:"100vh",background:"#F7F7F7"}}>
       <div style={{background:"#fff",padding:"24px 20px 18px",borderBottom:"1px solid #EEE"}}>
@@ -261,7 +321,7 @@ function CoachDetail({student,records,onBack,onUpdate,onDelete,showToast}){
           const isCurrent=active&&c.id===active.id;
           return(
             <div key={c.id} style={{background:"#fff",border:`1px solid ${isCurrent?"#1A1A1A":"#EEE"}`,borderRadius:14,padding:"14px 15px",marginBottom:8}}>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+              <div style={{display:"flex",justifyContent:"space-between"}}>
                 <div>
                   <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:4}}>
                     {isCurrent&&<span style={{fontSize:9,background:"#1A1A1A",color:"#fff",padding:"2px 7px",borderRadius:10}}>使用中</span>}
@@ -279,54 +339,39 @@ function CoachDetail({student,records,onBack,onUpdate,onDelete,showToast}){
             </div>
           );
         })}
-        {myRecords.length>0&&(
-          <>
-            <div style={{fontSize:12,color:"#AAA",letterSpacing:1.5,fontWeight:600,marginTop:20,marginBottom:10}}>最近上課紀錄</div>
-            {myRecords.map(r=>(
-              <div key={r.id} style={{background:"#fff",border:"1px solid #EEE",borderRadius:11,padding:"11px 14px",marginBottom:6,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                <span style={{fontSize:13,color:"#555"}}>{r.timestamp}</span>
-                <span style={{fontSize:12,color:"#D32F2F",fontWeight:700}}>−1 堂</span>
-              </div>
-            ))}
-          </>
-        )}
+        {myRecords.length>0&&(<>
+          <div style={{fontSize:12,color:"#AAA",letterSpacing:1.5,fontWeight:600,marginTop:20,marginBottom:10}}>最近上課紀錄</div>
+          {myRecords.map(r=>(<div key={r.id} style={{background:"#fff",border:"1px solid #EEE",borderRadius:11,padding:"11px 14px",marginBottom:6,display:"flex",justifyContent:"space-between",alignItems:"center"}}><span style={{fontSize:13,color:"#555"}}>{r.timestamp}</span><span style={{fontSize:12,color:"#D32F2F",fontWeight:700}}>−1 堂</span></div>))}
+        </>)}
         <div style={{marginTop:24}}><Btn variant="red" full onClick={()=>setShowDel(true)}>刪除此學員</Btn></div>
       </div>
-      {showAdd&&(
-        <Modal title="新增合約" onClose={()=>setShowAdd(false)}>
-          <div style={{fontSize:13,color:"#AAA",marginBottom:16}}>學員：<strong style={{color:"#1A1A1A"}}>{student.name}</strong></div>
-          <Field label="合約總堂數" value={form.total} onChange={v=>setForm(f=>({...f,total:v}))} type="number" placeholder="例：10"/>
-          <Field label="繳費日期" value={form.paidDate} onChange={v=>setForm(f=>({...f,paidDate:v}))} type="date"/>
-          <Field label="備注" value={form.note} onChange={v=>setForm(f=>({...f,note:v}))} placeholder="例：第二期…"/>
-          <div style={{display:"flex",gap:10,marginTop:8}}>
-            <Btn variant="light" style={{flex:1}} onClick={()=>setShowAdd(false)}>取消</Btn>
-            <Btn style={{flex:2}} onClick={handleAddContract}>新增合約</Btn>
-          </div>
-        </Modal>
-      )}
-      {showResetPin&&(
-        <Modal title="重設 PIN 碼" onClose={()=>setShowResetPin(false)}>
-          <div style={{fontSize:14,color:"#666",marginBottom:20,lineHeight:1.9}}>確定重設 <strong>{student.name}</strong> 的 PIN 碼？<br/><span style={{fontSize:12,color:"#AAA"}}>學員下次簽到時將自行設定新密碼。</span></div>
-          <div style={{display:"flex",gap:10}}>
-            <Btn variant="light" style={{flex:1}} onClick={()=>setShowResetPin(false)}>取消</Btn>
-            <Btn style={{flex:1}} onClick={handleResetPin}>確認重設</Btn>
-          </div>
-        </Modal>
-      )}
-      {showDel&&(
-        <Modal title="確認刪除" onClose={()=>setShowDel(false)}>
-          <div style={{fontSize:14,color:"#666",marginBottom:20,lineHeight:1.9}}>確定刪除 <strong>{student.name}</strong>？<br/><span style={{color:"#D32F2F",fontWeight:600}}>此操作無法復原。</span></div>
-          <div style={{display:"flex",gap:10}}>
-            <Btn variant="light" style={{flex:1}} onClick={()=>setShowDel(false)}>取消</Btn>
-            <Btn variant="red" style={{flex:1}} onClick={handleDelete}>確認刪除</Btn>
-          </div>
-        </Modal>
-      )}
+      {showAdd&&(<Modal title="新增合約" onClose={()=>setShowAdd(false)}>
+        <Field label="合約總堂數" value={form.total} onChange={v=>setForm(f=>({...f,total:v}))} type="number" placeholder="例：10"/>
+        <Field label="繳費日期" value={form.paidDate} onChange={v=>setForm(f=>({...f,paidDate:v}))} type="date"/>
+        <Field label="備注" value={form.note} onChange={v=>setForm(f=>({...f,note:v}))} placeholder="例：第二期…"/>
+        <div style={{display:"flex",gap:10,marginTop:8}}>
+          <Btn variant="light" style={{flex:1}} onClick={()=>setShowAdd(false)}>取消</Btn>
+          <Btn style={{flex:2}} onClick={handleAddContract}>新增合約</Btn>
+        </div>
+      </Modal>)}
+      {showResetPin&&(<Modal title="重設 PIN 碼" onClose={()=>setShowResetPin(false)}>
+        <div style={{fontSize:14,color:"#666",marginBottom:20,lineHeight:1.9}}>確定重設 <strong>{student.name}</strong> 的 PIN 碼？</div>
+        <div style={{display:"flex",gap:10}}>
+          <Btn variant="light" style={{flex:1}} onClick={()=>setShowResetPin(false)}>取消</Btn>
+          <Btn style={{flex:1}} onClick={()=>{setShowResetPin(false);save({...student,pin:null});}}>確認重設</Btn>
+        </div>
+      </Modal>)}
+      {showDel&&(<Modal title="確認刪除" onClose={()=>setShowDel(false)}>
+        <div style={{fontSize:14,color:"#666",marginBottom:20,lineHeight:1.9}}>確定刪除 <strong>{student.name}</strong>？<br/><span style={{color:"#D32F2F",fontWeight:600}}>此操作無法復原。</span></div>
+        <div style={{display:"flex",gap:10}}>
+          <Btn variant="light" style={{flex:1}} onClick={()=>setShowDel(false)}>取消</Btn>
+          <Btn variant="red" style={{flex:1}} onClick={()=>{onDelete(student.id);showToast("已刪除學員","warn");onBack();}}>確認刪除</Btn>
+        </div>
+      </Modal>)}
     </div>
   );
 }
 
-// ── Edit Schedule ──────────────────────────────────────────────────────────────
 function EditSchedule({students,onSave,onBack}){
   const [sel,setSel]=useState(new Set(students.filter(s=>s.scheduledToday).map(s=>s.id)));
   const toggle=id=>setSel(prev=>{const n=new Set(prev);n.has(id)?n.delete(id):n.add(id);return n;});
@@ -362,13 +407,8 @@ function EditSchedule({students,onSave,onBack}){
   );
 }
 
-// ── Add Student ────────────────────────────────────────────────────────────────
 function AddStudent({onSave,onBack}){
   const [name,setName]=useState("");const [total,setTotal]=useState("");const [paidDate,setPaidDate]=useState(new Date().toISOString().split("T")[0]);const [note,setNote]=useState("");const [scheduledToday,setScheduled]=useState(false);
-  const handleSave=()=>{
-    if(!name.trim()||!total||Number(total)<1) return;
-    onSave({id:String(Date.now()),name:name.trim(),pin:null,scheduledToday,contracts:[{id:Date.now()+1,total:Number(total),used:0,paidDate,note}]});
-  };
   return(
     <div style={{minHeight:"100vh",background:"#F7F7F7"}}>
       <div style={{background:"#fff",padding:"28px 20px 18px",borderBottom:"1px solid #EEE"}}>
@@ -386,14 +426,13 @@ function AddStudent({onSave,onBack}){
             {[true,false].map(v=>(<button key={String(v)} onClick={()=>setScheduled(v)} style={{flex:1,padding:"11px",background:scheduledToday===v?"#1A1A1A":"#F2F2F2",border:"none",borderRadius:11,fontSize:14,fontWeight:600,cursor:"pointer",color:scheduledToday===v?"#fff":"#888"}}>{v?"是":"否"}</button>))}
           </div>
         </div>
-        <Btn full onClick={handleSave}>新增學員</Btn>
+        <Btn full onClick={()=>{if(!name.trim()||!total||Number(total)<1)return;onSave({id:String(Date.now()),name:name.trim(),pin:null,scheduledToday,contracts:[{id:Date.now()+1,total:Number(total),used:0,paidDate,note}]});}}>新增學員</Btn>
         <div style={{background:"#FFFDE7",borderRadius:11,padding:"10px 14px",marginTop:14,fontSize:12,color:"#F57F17",lineHeight:1.7}}>💡 PIN 碼將在首次簽到時由學員自行設定</div>
       </div>
     </div>
   );
 }
 
-// ── PIN Screen ─────────────────────────────────────────────────────────────────
 function PinScreen({student,isFirstTime,onSuccess,onBack}){
   const [pin,setPin]=useState("");const [conf,setConf]=useState("");const [step,setStep]=useState(isFirstTime?"set":"verify");const [error,setError]=useState("");const [shake,setShake]=useState(false);
   const doShake=msg=>{setShake(true);setError(msg);setPin("");setConf("");setTimeout(()=>setShake(false),500);};
@@ -430,7 +469,6 @@ function PinScreen({student,isFirstTime,onSuccess,onBack}){
   );
 }
 
-// ── Student Info ───────────────────────────────────────────────────────────────
 function StudentInfo({student,records,onCheckin,onBack}){
   const [showConfirm,setShowConfirm]=useState(false);
   const totalRem=getTotalRemaining(student);
@@ -459,42 +497,27 @@ function StudentInfo({student,records,onCheckin,onBack}){
         </div>
         {totalRem<=3&&totalRem>0&&<div style={{background:"#FFEBEE",border:"1px solid #FFCDD2",borderRadius:11,padding:"11px 14px",marginBottom:14,color:"#D32F2F",fontSize:13,fontWeight:600,textAlign:"center"}}>⚠️ 合約即將結束，請向教練洽詢續課</div>}
         {totalRem<=0&&<div style={{background:"#F5F5F5",border:"1px solid #EEE",borderRadius:11,padding:"11px 14px",marginBottom:14,color:"#9E9E9E",fontSize:13,fontWeight:700,textAlign:"center"}}>🚫 堂數已用完，請向教練洽詢續課</div>}
-        {totalRem>0&&(
-          <div style={{marginBottom:20}}>
-            <Btn full onClick={()=>setShowConfirm(true)}>簽到</Btn>
-            <div style={{fontSize:11,color:"#CCC",textAlign:"center",marginTop:7}}>點擊後需再次確認</div>
-          </div>
-        )}
-        {student.contracts.length>0&&(
-          <>
-            <div style={{fontSize:12,color:"#AAA",letterSpacing:1.5,fontWeight:600,marginBottom:8}}>合約紀錄</div>
-            {[...student.contracts].reverse().map(c=>{
-              const rem=Math.max(0,c.total-c.used);
-              return(<div key={c.id} style={{background:"#fff",border:"1px solid #EEE",borderRadius:11,padding:"10px 14px",marginBottom:6,display:"flex",justifyContent:"space-between",alignItems:"center"}}><div><div style={{fontSize:13,color:"#555",fontWeight:600}}>{c.paidDate}</div>{c.note&&<div style={{fontSize:11,color:"#BBB",marginTop:1}}>{c.note}</div>}</div><div style={{fontSize:14,fontWeight:800,color:remColor(rem)}}>{rem}<span style={{fontSize:11,color:"#CCC",fontWeight:400}}>/{c.total}</span></div></div>);
-            })}
-          </>
-        )}
-        {myRecords.length>0&&(
-          <>
-            <div style={{fontSize:12,color:"#AAA",letterSpacing:1.5,fontWeight:600,marginTop:18,marginBottom:8}}>最近上課紀錄</div>
-            {myRecords.map(r=>(<div key={r.id} style={{background:"#fff",border:"1px solid #EEE",borderRadius:11,padding:"11px 14px",marginBottom:6,display:"flex",justifyContent:"space-between"}}><span style={{fontSize:13,color:"#555"}}>{r.timestamp}</span><span style={{fontSize:12,color:"#D32F2F",fontWeight:700}}>−1 堂</span></div>))}
-          </>
-        )}
+        {totalRem>0&&(<div style={{marginBottom:20}}><Btn full onClick={()=>setShowConfirm(true)}>簽到</Btn><div style={{fontSize:11,color:"#CCC",textAlign:"center",marginTop:7}}>點擊後需再次確認</div></div>)}
+        {student.contracts.length>0&&(<>
+          <div style={{fontSize:12,color:"#AAA",letterSpacing:1.5,fontWeight:600,marginBottom:8}}>合約紀錄</div>
+          {[...student.contracts].reverse().map(c=>{const rem=Math.max(0,c.total-c.used);return(<div key={c.id} style={{background:"#fff",border:"1px solid #EEE",borderRadius:11,padding:"10px 14px",marginBottom:6,display:"flex",justifyContent:"space-between",alignItems:"center"}}><div><div style={{fontSize:13,color:"#555",fontWeight:600}}>{c.paidDate}</div>{c.note&&<div style={{fontSize:11,color:"#BBB",marginTop:1}}>{c.note}</div>}</div><div style={{fontSize:14,fontWeight:800,color:remColor(rem)}}>{rem}<span style={{fontSize:11,color:"#CCC",fontWeight:400}}>/{c.total}</span></div></div>);})}
+        </>)}
+        {myRecords.length>0&&(<>
+          <div style={{fontSize:12,color:"#AAA",letterSpacing:1.5,fontWeight:600,marginTop:18,marginBottom:8}}>最近上課紀錄</div>
+          {myRecords.map(r=>(<div key={r.id} style={{background:"#fff",border:"1px solid #EEE",borderRadius:11,padding:"11px 14px",marginBottom:6,display:"flex",justifyContent:"space-between"}}><span style={{fontSize:13,color:"#555"}}>{r.timestamp}</span><span style={{fontSize:12,color:"#D32F2F",fontWeight:700}}>−1 堂</span></div>))}
+        </>)}
       </div>
-      {showConfirm&&(
-        <Modal title="確認簽到" onClose={()=>setShowConfirm(false)}>
-          <div style={{fontSize:14,color:"#666",marginBottom:20,lineHeight:1.9}}>確定登記今日上課？<br/>簽到後剩餘 <strong style={{color:remColor(totalRem-1)}}>{Math.max(0,totalRem-1)} 堂</strong>。<br/><span style={{fontSize:11,color:"#CCC"}}>時間由系統自動記錄。</span></div>
-          <div style={{display:"flex",gap:10}}>
-            <Btn variant="light" style={{flex:1}} onClick={()=>setShowConfirm(false)}>取消</Btn>
-            <Btn style={{flex:2}} onClick={()=>{setShowConfirm(false);onCheckin();}}>✓ 確認簽到</Btn>
-          </div>
-        </Modal>
-      )}
+      {showConfirm&&(<Modal title="確認簽到" onClose={()=>setShowConfirm(false)}>
+        <div style={{fontSize:14,color:"#666",marginBottom:20,lineHeight:1.9}}>確定登記今日上課？<br/>簽到後剩餘 <strong style={{color:remColor(totalRem-1)}}>{Math.max(0,totalRem-1)} 堂</strong>。</div>
+        <div style={{display:"flex",gap:10}}>
+          <Btn variant="light" style={{flex:1}} onClick={()=>setShowConfirm(false)}>取消</Btn>
+          <Btn style={{flex:2}} onClick={()=>{setShowConfirm(false);onCheckin();}}>✓ 確認簽到</Btn>
+        </div>
+      </Modal>)}
     </div>
   );
 }
 
-// ── Records Screen ─────────────────────────────────────────────────────────────
 function RecordsScreen({records,onBack}){
   return(
     <div style={{minHeight:"100vh",background:"#F7F7F7"}}>
@@ -510,31 +533,25 @@ function RecordsScreen({records,onBack}){
   );
 }
 
-// ── Settings Screen ────────────────────────────────────────────────────────────
-function SettingsScreen({students,records,onImport,onBack}){
-  const [showImportConfirm,setShowImportConfirm]=useState(false);
-  const [pendingData,setPendingData]=useState(null);
-  const fileRef=useRef();
-
-  const handleFileChange=e=>{
-    const file=e.target.files[0]; if(!file) return;
-    const reader=new FileReader();
-    reader.onload=ev=>{
-      try{
-        const data=JSON.parse(ev.target.result);
-        if(!data.students||!data.records) throw new Error("格式錯誤");
-        setPendingData(data);
-        setShowImportConfirm(true);
-      }catch{alert("檔案格式錯誤，請選擇正確的備份檔案");}
-    };
-    reader.readAsText(file);
-    e.target.value="";
+// ── Settings ───────────────────────────────────────────────────
+function SettingsScreen({students,records,onReload,showToast}){
+  const [syncing,setSyncing]=useState(false);
+  const handleExcel=()=>{exportExcel(students,records);showToast("✅ Excel 已下載");};
+  const handleForceSync=async()=>{
+    if(!hasGAS()){showToast("尚未設定 GAS 網址","warn");return;}
+    setSyncing(true);
+    const r=await gasPost({action:"syncAll",students});
+    setSyncing(false);
+    if(r&&r.ok){showToast("✅ 已同步至 Google Sheet");}
+    else{showToast("同步失敗，請確認網路","error");}
   };
-
-  const lsUsed=()=>{
-    try{const s=JSON.stringify(localStorage);return(new Blob([s]).size/1024).toFixed(1)+"KB";}catch{return "未知";}
+  const handleReload=async()=>{
+    if(!hasGAS()){showToast("尚未設定 GAS 網址","warn");return;}
+    setSyncing(true);
+    await onReload();
+    setSyncing(false);
+    showToast("✅ 已從雲端重新載入");
   };
-
   return(
     <div style={{minHeight:"100vh",background:"#F7F7F7"}}>
       <div style={{background:"#fff",padding:"28px 20px 18px",borderBottom:"1px solid #EEE"}}>
@@ -543,70 +560,61 @@ function SettingsScreen({students,records,onImport,onBack}){
       </div>
       <div style={{padding:"20px 20px 100px"}}>
 
+        {/* 雲端同步狀態 */}
+        <div style={{background:hasGAS()?"#E8F5E9":"#FFF9C4",border:`1px solid ${hasGAS()?"#C8E6C9":"#FFF59D"}`,borderRadius:14,padding:"14px 16px",marginBottom:16}}>
+          <div style={{fontSize:13,fontWeight:700,color:hasGAS()?"#2E7D32":"#F57F17",marginBottom:4}}>
+            {hasGAS()?"☁ 雲端同步已啟用":"⚠ 本機模式（未設定同步）"}
+          </div>
+          <div style={{fontSize:12,color:hasGAS()?"#388E3C":"#E65100",lineHeight:1.7}}>
+            {hasGAS()
+              ?"每次簽到、新增、修改都會自動同步到 Google Sheet，不同裝置開啟同一網址即可共用資料。"
+              :"請在 index.html 第一行填入 Apps Script 網址，即可啟用多裝置同步。"}
+          </div>
+        </div>
+
         {/* 資料概況 */}
         <div style={{background:"#fff",border:"1px solid #EEE",borderRadius:16,padding:"18px",marginBottom:16}}>
           <div style={{fontSize:12,color:"#AAA",letterSpacing:1.5,fontWeight:600,marginBottom:14}}>目前資料</div>
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10}}>
-            {[{label:"學員",val:students.length},{label:"簽到紀錄",val:records.length},{label:"儲存空間",val:lsUsed()}].map(({label,val})=>(
-              <div key={label} style={{background:"#F7F7F7",borderRadius:11,padding:"12px 8px",textAlign:"center"}}>
-                <div style={{fontSize:18,fontWeight:900,color:"#1A1A1A"}}>{val}</div>
-                <div style={{fontSize:10,color:"#AAA",marginTop:3}}>{label}</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+            {[{label:"學員",val:students.length},{label:"簽到紀錄",val:records.length}].map(({label,val})=>(
+              <div key={label} style={{background:"#F7F7F7",borderRadius:11,padding:"14px 10px",textAlign:"center"}}>
+                <div style={{fontSize:22,fontWeight:900,color:"#1A1A1A"}}>{val}</div>
+                <div style={{fontSize:11,color:"#AAA",marginTop:3}}>{label}</div>
               </div>
             ))}
           </div>
         </div>
 
-        {/* 匯出 */}
+        {/* Excel 匯出 */}
         <div style={{background:"#fff",border:"1px solid #EEE",borderRadius:16,padding:"18px",marginBottom:16}}>
-          <div style={{fontSize:12,color:"#AAA",letterSpacing:1.5,fontWeight:600,marginBottom:6}}>匯出備份</div>
-          <div style={{fontSize:13,color:"#888",marginBottom:14,lineHeight:1.7}}>將所有學員資料與簽到紀錄下載為 <strong>.json</strong> 檔案，儲存到手機或雲端硬碟。</div>
-          <Btn full onClick={()=>doExport(students,records)}>⬇ 立即匯出備份</Btn>
+          <div style={{fontSize:12,color:"#AAA",letterSpacing:1.5,fontWeight:600,marginBottom:6}}>匯出 Excel</div>
+          <div style={{fontSize:13,color:"#888",marginBottom:14,lineHeight:1.7}}>下載包含學員資料、合約記錄、簽到紀錄的 <strong>.xls</strong> 檔案，可用 Excel 或 Numbers 開啟。</div>
+          <Btn full variant="green" onClick={handleExcel}>📊 下載 Excel 備份</Btn>
         </div>
 
-        {/* 匯入 */}
-        <div style={{background:"#fff",border:"1px solid #EEE",borderRadius:16,padding:"18px",marginBottom:16}}>
-          <div style={{fontSize:12,color:"#AAA",letterSpacing:1.5,fontWeight:600,marginBottom:6}}>匯入還原</div>
-          <div style={{fontSize:13,color:"#888",marginBottom:14,lineHeight:1.7}}>選擇之前匯出的 <strong>.json</strong> 備份檔案，還原所有資料。<br/><span style={{color:"#D32F2F"}}>注意：會覆蓋目前所有資料。</span></div>
-          <input ref={fileRef} type="file" accept=".json" onChange={handleFileChange} style={{display:"none"}}/>
-          <Btn full variant="light" onClick={()=>fileRef.current.click()}>⬆ 選擇備份檔案匯入</Btn>
-        </div>
-
-        {/* 說明 */}
-        <div style={{background:"#E8F5E9",border:"1px solid #C8E6C9",borderRadius:14,padding:"14px 16px"}}>
-          <div style={{fontSize:13,fontWeight:700,color:"#2E7D32",marginBottom:8}}>💡 建議備份方式</div>
-          <div style={{fontSize:12,color:"#388E3C",lineHeight:1.9}}>
-            每次簽到後，到此頁面點「匯出備份」，<br/>
-            將檔案存到 <strong>iCloud Drive</strong> 或 <strong>Google Drive</strong>，<br/>
-            換手機或清除資料時可隨時還原。
+        {/* 雲端操作 */}
+        {hasGAS()&&(
+          <div style={{background:"#fff",border:"1px solid #EEE",borderRadius:16,padding:"18px",marginBottom:16}}>
+            <div style={{fontSize:12,color:"#AAA",letterSpacing:1.5,fontWeight:600,marginBottom:6}}>雲端操作</div>
+            <div style={{display:"flex",gap:10}}>
+              <Btn full variant="light" disabled={syncing} onClick={handleReload} style={{flex:1}}>
+                {syncing?"同步中…":"⬇ 從雲端重新載入"}
+              </Btn>
+              <Btn full disabled={syncing} onClick={handleForceSync} style={{flex:1}}>
+                {syncing?"同步中…":"⬆ 強制同步至雲端"}
+              </Btn>
+            </div>
           </div>
-        </div>
+        )}
       </div>
-
-      {showImportConfirm&&pendingData&&(
-        <Modal title="確認匯入" onClose={()=>{setShowImportConfirm(false);setPendingData(null);}}>
-          <div style={{fontSize:14,color:"#666",marginBottom:8,lineHeight:1.9}}>
-            即將匯入備份：<br/>
-            <strong style={{color:"#1A1A1A"}}>{pendingData.students.length} 位學員、{pendingData.records.length} 筆紀錄</strong><br/>
-            {pendingData.exportedAt&&<span style={{fontSize:12,color:"#AAA"}}>備份時間：{pendingData.exportedAt}</span>}
-          </div>
-          <div style={{background:"#FFEBEE",borderRadius:10,padding:"10px 13px",marginBottom:18,fontSize:12,color:"#D32F2F",fontWeight:600}}>⚠️ 目前資料將被覆蓋，無法復原</div>
-          <div style={{display:"flex",gap:10}}>
-            <Btn variant="light" style={{flex:1}} onClick={()=>{setShowImportConfirm(false);setPendingData(null);}}>取消</Btn>
-            <Btn style={{flex:1}} onClick={()=>{onImport(pendingData);setShowImportConfirm(false);setPendingData(null);}}>確認匯入</Btn>
-          </div>
-        </Modal>
-      )}
     </div>
   );
 }
 
-// ── Success Screen ─────────────────────────────────────────────────────────────
-function SuccessScreen({studentName,onExport}){
+// ── Success Screen ─────────────────────────────────────────────
+function SuccessScreen({students,records}){
   const [count,setCount]=useState(5);
-  useEffect(()=>{
-    const t=setInterval(()=>setCount(c=>{if(c<=1){clearInterval(t);}return c-1;}),1000);
-    return()=>clearInterval(t);
-  },[]);
+  useEffect(()=>{const t=setInterval(()=>setCount(c=>{if(c<=1)clearInterval(t);return c-1;}),1000);return()=>clearInterval(t);},[]);
   return(
     <div style={{minHeight:"100vh",background:"#fff",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:30}}>
       <svg width="64" height="64" viewBox="0 0 64 64" fill="none" style={{marginBottom:20}}>
@@ -614,17 +622,21 @@ function SuccessScreen({studentName,onExport}){
         <path d="M20 32l9 9 15-15" stroke="#2E7D32" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
       </svg>
       <div style={{fontSize:22,fontWeight:900,color:"#1A1A1A"}}>簽到成功！</div>
-      <div style={{fontSize:14,color:"#AAA",marginTop:10,marginBottom:32}}>{count>0?`${count} 秒後自動返回…`:"返回中…"}</div>
-      <button onClick={onExport} style={{background:"#E8F5E9",border:"1px solid #C8E6C9",color:"#2E7D32",padding:"13px 28px",borderRadius:14,fontSize:14,fontWeight:700,cursor:"pointer",width:"100%",maxWidth:280}}>⬇ 立即備份資料</button>
-      <div style={{fontSize:11,color:"#CCC",marginTop:8}}>建議每次簽到後備份一次</div>
+      {hasGAS()
+        ?<div style={{fontSize:14,color:"#2E7D32",marginTop:10,fontWeight:600}}>☁ 已自動同步至 Google Sheet</div>
+        :<div style={{fontSize:14,color:"#AAA",marginTop:10}}>資料已儲存至本機</div>
+      }
+      <div style={{fontSize:13,color:"#CCC",marginTop:6}}>{count>0?`${count} 秒後自動返回…`:""}</div>
     </div>
   );
 }
 
-// ── Main App ───────────────────────────────────────────────────────────────────
+// ── Main App ───────────────────────────────────────────────────
 function App(){
   const [students,setStudents]=useState(()=>lsGet(LS_S,[]));
   const [records,setRecords]=useState(()=>lsGet(LS_R,[]));
+  const [loading,setLoading]=useState(hasGAS());
+  const [syncing,setSyncing]=useState(false);
   const [screen,setScreen]=useState("home");
   const [tab,setTab]=useState("home");
   const [selected,setSelected]=useState(null);
@@ -633,48 +645,83 @@ function App(){
   const go=setScreen;
   const showToast=(msg,type="ok")=>setToast({msg,type});
 
-  const saveStudents=s=>{setStudents(s);lsSet(LS_S,s);};
-  const saveRecords=r=>{setRecords(r);lsSet(LS_R,r);};
+  // 啟動時從雲端載入
+  useEffect(()=>{
+    if(!hasGAS()){setLoading(false);return;}
+    (async()=>{
+      const [s,r]=await Promise.all([gasGet("getStudents"),gasGet("getRecords")]);
+      if(s&&Array.isArray(s)){setStudents(s);lsSet(LS_S,s);}
+      if(r&&Array.isArray(r)){setRecords(r);lsSet(LS_R,r);}
+      setLoading(false);
+    })();
+  },[]);
 
-  const handleUpdateStudent=updated=>{
+  const syncStudent=async updated=>{
+    setSyncing(true);
+    await gasPost({action:"saveStudent",student:updated});
+    setSyncing(false);
+  };
+  const saveStudents=async(next,sync=true)=>{
+    setStudents(next);lsSet(LS_S,next);
+  };
+  const saveRecords=(next)=>{setRecords(next);lsSet(LS_R,next);};
+
+  const handleUpdateStudent=async updated=>{
     const next=students.map(s=>s.id===updated.id?updated:s);
-    saveStudents(next); go("home"); setCoachViewing(null);
+    await saveStudents(next);
+    if(hasGAS()) await syncStudent(updated);
+    go("home");setCoachViewing(null);
   };
-  const handleDeleteStudent=id=>{
-    saveStudents(students.filter(s=>s.id!==id));
+  const handleDeleteStudent=async id=>{
+    const next=students.filter(s=>s.id!==id);
+    await saveStudents(next);
+    if(hasGAS()) await gasPost({action:"deleteStudent",id});
   };
-  const handlePinSuccess=newPin=>{
+  const handlePinSuccess=async newPin=>{
     if(newPin){
       const next=students.map(s=>s.id===selected.id?{...s,pin:newPin}:s);
-      saveStudents(next);
+      setStudents(next);lsSet(LS_S,next);
+      if(hasGAS()) await syncStudent({...selected,pin:newPin});
     }
     go("studentInfo");
   };
-  const handleCheckin=()=>{
+  const handleCheckin=async()=>{
     const timestamp=getTaiwanTime();
     const nextStudents=students.map(s=>{
       if(s.id!==selected.id) return s;
       let done=false;
       return{...s,contracts:s.contracts.map(c=>{if(!done&&c.total-c.used>0){done=true;return{...c,used:c.used+1};}return c;})};
     });
-    const newRecord={id:Date.now(),studentId:selected.id,studentName:selected.name,timestamp};
-    const nextRecords=[...records,newRecord];
-    saveStudents(nextStudents);
+    const newRec={id:Date.now(),studentId:selected.id,studentName:selected.name,timestamp};
+    const nextRecords=[...records,newRec];
+    setStudents(nextStudents);lsSet(LS_S,nextStudents);
     saveRecords(nextRecords);
     go("success");
+    if(hasGAS()){
+      const upd=nextStudents.find(s=>s.id===selected.id);
+      await Promise.all([
+        gasPost({action:"saveStudent",student:upd}),
+        gasPost({action:"checkin",studentId:selected.id,studentName:selected.name,timestamp}),
+      ]);
+    }
+    setTimeout(()=>{go("home");setSelected(null);showToast(`✅ ${selected.name} 簽到成功！`);},5000);
   };
-  const handleAddStudent=s=>{
-    saveStudents([...students,s]);
-    showToast("✅ 學員已新增"); go("home");
+  const handleAddStudent=async s=>{
+    const next=[...students,s];
+    setStudents(next);lsSet(LS_S,next);
+    if(hasGAS()) await syncStudent(s);
+    showToast("✅ 學員已新增");go("home");
   };
-  const handleSaveSchedule=selIds=>{
-    saveStudents(students.map(s=>({...s,scheduledToday:selIds.has(s.id)})));
-    showToast("✅ 今日排課已更新"); go("home");
+  const handleSaveSchedule=async selIds=>{
+    const next=students.map(s=>({...s,scheduledToday:selIds.has(s.id)}));
+    setStudents(next);lsSet(LS_S,next);
+    if(hasGAS()) await gasPost({action:"syncAll",students:next});
+    showToast("✅ 今日排課已更新");go("home");
   };
-  const handleImport=data=>{
-    saveStudents(data.students);
-    saveRecords(data.records);
-    showToast("✅ 資料已還原");
+  const handleReload=async()=>{
+    const [s,r]=await Promise.all([gasGet("getStudents"),gasGet("getRecords")]);
+    if(s&&Array.isArray(s)){setStudents(s);lsSet(LS_S,s);}
+    if(r&&Array.isArray(r)){setRecords(r);lsSet(LS_R,r);}
   };
 
   const tabChange=t=>{setTab(t);go(t);};
@@ -682,20 +729,20 @@ function App(){
   const coachStudent=coachViewing?students.find(s=>s.id===coachViewing.id):null;
   const showTabs=["home","records","settings"].includes(screen);
 
+  if(loading) return <Loading msg="從雲端載入資料…"/>;
+
   return(
     <div style={{position:"relative"}}>
       {toast&&<Toast msg={toast.msg} type={toast.type} onDone={()=>setToast(null)}/>}
-
-      {screen==="home"&&<CoachHome students={students} onSignIn={s=>{setSelected(s);go("studentPin");}} onEdit={s=>{setCoachViewing(s);go("coachDetail");}} onAdd={()=>go("addStudent")} onEditSchedule={()=>go("schedule")}/>}
+      {screen==="home"&&<CoachHome students={students} onSignIn={s=>{setSelected(s);go("studentPin");}} onEdit={s=>{setCoachViewing(s);go("coachDetail");}} onAdd={()=>go("addStudent")} onEditSchedule={()=>go("schedule")} syncing={syncing}/>}
       {screen==="coachDetail"&&coachStudent&&<CoachDetail student={coachStudent} records={records} onBack={()=>{go("home");setCoachViewing(null);}} onUpdate={handleUpdateStudent} onDelete={handleDeleteStudent} showToast={showToast}/>}
       {screen==="schedule"&&<EditSchedule students={students} onSave={handleSaveSchedule} onBack={()=>go("home")}/>}
       {screen==="addStudent"&&<AddStudent onSave={handleAddStudent} onBack={()=>go("home")}/>}
       {screen==="studentPin"&&selected&&<PinScreen student={selected} isFirstTime={selected.pin===null} onSuccess={handlePinSuccess} onBack={()=>{go("home");setSelected(null);}}/>}
       {screen==="studentInfo"&&currentStudent&&<StudentInfo student={currentStudent} records={records} onCheckin={handleCheckin} onBack={()=>go("studentPin")}/>}
-      {screen==="success"&&<SuccessScreen studentName={selected?.name} onExport={()=>doExport(students,records)}/>}
+      {screen==="success"&&<SuccessScreen students={students} records={records}/>}
       {screen==="records"&&<RecordsScreen records={records} onBack={()=>{go("home");setTab("home");}}/>}
-      {screen==="settings"&&<SettingsScreen students={students} records={records} onImport={handleImport} onBack={()=>go("home")}/>}
-
+      {screen==="settings"&&<SettingsScreen students={students} records={records} onReload={handleReload} showToast={showToast}/>}
       {showTabs&&<BottomTabs active={tab} onChange={tabChange}/>}
     </div>
   );
