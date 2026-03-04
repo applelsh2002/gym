@@ -63,6 +63,21 @@ function getTaiwanTime(){
   const pad=n=>String(n).padStart(2,"0");
   return `${tw.getFullYear()}/${pad(tw.getMonth()+1)}/${pad(tw.getDate())} ${pad(tw.getHours())}:${pad(tw.getMinutes())}:${pad(tw.getSeconds())}`;
 }
+// 標準化時間格式，確保從 Google Sheet 抓回的時間統一為 YYYY/MM/DD HH:MM:SS
+function normalizeTimestamp(v){
+  if(!v) return "";
+  const s=String(v).trim();
+  // 已是正確格式
+  if(/^\d{4}\/\d{2}\/\d{2} \d{2}:\d{2}:\d{2}$/.test(s)) return s;
+  // 嘗試解析任意日期格式
+  const d=new Date(s);
+  if(!isNaN(d.getTime())){
+    const tw=new Date(d.toLocaleString("en-US",{timeZone:"Asia/Taipei"}));
+    const pad=n=>String(n).padStart(2,"0");
+    return `${tw.getFullYear()}/${pad(tw.getMonth()+1)}/${pad(tw.getDate())} ${pad(tw.getHours())}:${pad(tw.getMinutes())}:${pad(tw.getSeconds())}`;
+  }
+  return s;
+}
 const getTotalRemaining=s=>s.contracts.reduce((sum,c)=>sum+Math.max(0,c.total-c.used),0);
 const remColor=r=>r<=0?"#9E9E9E":r<=3?"#D32F2F":"#2E7D32";
 const remBg=r=>r<=0?"#F5F5F5":r<=3?"#FFEBEE":"#E8F5E9";
@@ -684,15 +699,22 @@ function App(){
   const go=setScreen;
   const showToast=(msg,type="ok")=>setToast({msg,type});
 
-  // 啟動時背景同步，不擋畫面
+  // 啟動時：先載學員（快），簽到紀錄背景慢慢載
   useEffect(()=>{
     (async()=>{
       try{
-        const [s,r]=await Promise.all([gasGet("getStudents"),gasGet("getRecords")]);
+        const s=await gasGet("getStudents");
         if(s&&Array.isArray(s)){setStudents(s);lsSet(LS_S,s);}
-        if(r&&Array.isArray(r)){setRecords(r);lsSet(LS_R,r);}
       }catch{}
       setSyncing(false);
+      // 學員載完後，背景繼續載簽到紀錄
+      try{
+        const r=await gasGet("getRecords");
+        if(r&&Array.isArray(r)){
+          const normalized=r.map(rec=>({...rec,timestamp:normalizeTimestamp(rec.timestamp)}));
+          setRecords(normalized);lsSet(LS_R,normalized);
+        }
+      }catch{}
     })();
   },[]);
 
@@ -748,7 +770,10 @@ function App(){
   const handleReload=async()=>{
     const [s,r]=await Promise.all([gasGet("getStudents"),gasGet("getRecords")]);
     if(s&&Array.isArray(s)){setStudents(s);lsSet(LS_S,s);}
-    if(r&&Array.isArray(r)){setRecords(r);lsSet(LS_R,r);}
+    if(r&&Array.isArray(r)){
+      const normalized=r.map(rec=>({...rec,timestamp:normalizeTimestamp(rec.timestamp)}));
+      setRecords(normalized);lsSet(LS_R,normalized);
+    }
   };
 
   const tabChange=t=>{setTab(t);go(t);};
