@@ -12,10 +12,11 @@
   <style>
     *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;margin:0;padding:0}
     body{background:#F7F7F7;font-family:'Noto Sans TC',sans-serif}
-    input,button{font-family:'Noto Sans TC',sans-serif}
+    input,button,canvas{font-family:'Noto Sans TC',sans-serif}
     #root{max-width:430px;margin:0 auto;min-height:100vh;position:relative}
     @keyframes spin{to{transform:rotate(360deg)}}
-    @keyframes shake{0%,100%{transform:translateX(0)}25%{transform:translateX(-8px)}75%{transform:translateX(8px)}}
+    @keyframes shake{0%,100%{transform:translateX(0)}25%{transform:translateX(-10px)}75%{transform:translateX(10px)}}
+    canvas{touch-action:none}
   </style>
 </head>
 <body>
@@ -24,38 +25,25 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
 <script type="text/babel">
-const {useState,useRef,useEffect}=React;
+const {useState,useRef,useEffect,useCallback}=React;
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-//  ★ Apps Script 網址 ★
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 const GAS_URL="https://script.google.com/macros/s/AKfycbzLLIRSe3egQLxebDDeq1kSLyfzlysgZkimuP7ACCYs2OYZuiiA_7lpfuOBraEWaGD1mw/exec";
+const COACH_PIN="0000"; // ← 教練管理密碼，可自行修改
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 const LS_S="coach_students",LS_R="coach_records";
 function lsGet(k,fb){try{const v=localStorage.getItem(k);return v?JSON.parse(v):fb;}catch{return fb;}}
 function lsSet(k,v){try{localStorage.setItem(k,JSON.stringify(v));}catch{}}
 
-// GAS 呼叫（全部用 GET，避免 CORS）
 async function gasGet(action){
-  try{
-    const r=await fetch(GAS_URL+"?action="+action,{redirect:"follow"});
-    return await r.json();
-  }catch{return null;}
+  try{const r=await fetch(GAS_URL+"?action="+action,{redirect:"follow"});return await r.json();}catch{return null;}
 }
-// 寫入操作：先返回、背景送出，完全不擋 UI
 function gasSync(body){
-  if(!GAS_URL) return;
+  if(!GAS_URL)return;
   const encoded=encodeURIComponent(JSON.stringify(body));
   fetch(GAS_URL+"?action=post&payload="+encoded,{redirect:"follow"}).catch(()=>{});
 }
-
-// ── PIN 雜湊（SHA-256，不可逆）────────────────────────────────
-async function hashPin(pin){
-  const buf=await crypto.subtle.digest("SHA-256",new TextEncoder().encode("coach_pin_salt_"+pin));
-  return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,"0")).join("").slice(0,16);
-}
-// 判斷是否已是 hash（16位hex）
-const isHashed=v=>v&&/^[0-9a-f]{16}$/.test(v);
 
 function getTaiwanTime(){
   const d=new Date();
@@ -63,13 +51,10 @@ function getTaiwanTime(){
   const pad=n=>String(n).padStart(2,"0");
   return `${tw.getFullYear()}/${pad(tw.getMonth()+1)}/${pad(tw.getDate())} ${pad(tw.getHours())}:${pad(tw.getMinutes())}:${pad(tw.getSeconds())}`;
 }
-// 標準化時間格式，確保從 Google Sheet 抓回的時間統一為 YYYY/MM/DD HH:MM:SS
 function normalizeTimestamp(v){
-  if(!v) return "";
+  if(!v)return"";
   const s=String(v).trim();
-  // 已是正確格式
-  if(/^\d{4}\/\d{2}\/\d{2} \d{2}:\d{2}:\d{2}$/.test(s)) return s;
-  // 嘗試解析任意日期格式
+  if(/^\d{4}\/\d{2}\/\d{2} \d{2}:\d{2}:\d{2}$/.test(s))return s;
   const d=new Date(s);
   if(!isNaN(d.getTime())){
     const tw=new Date(d.toLocaleString("en-US",{timeZone:"Asia/Taipei"}));
@@ -78,55 +63,133 @@ function normalizeTimestamp(v){
   }
   return s;
 }
-const getTotalRemaining=s=>s.contracts.reduce((sum,c)=>sum+Math.max(0,c.total-c.used),0);
+
+async function hashPin(pin){
+  const buf=await crypto.subtle.digest("SHA-256",new TextEncoder().encode("coach_pin_salt_"+pin));
+  return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,"0")).join("").slice(0,16);
+}
+const isHashed=v=>v&&/^[0-9a-f]{16}$/.test(v);
+// 檢查 PIN 是否已被其他學員使用
+async function isPinTaken(pin, students, excludeId=null){
+  for(const s of students){
+    if(excludeId && s.id===excludeId) continue;
+    if(!s.pin) continue;
+    if(await pinMatches(pin,s.pin)) return true;
+  }
+  return false;
+}
+
+async function pinMatches(input,stored){
+  if(!stored)return false;
+  if(isHashed(stored)){const h=await hashPin(input);return h===stored;}
+  return input===stored;
+}
+
+const getTotalRemaining=s=>s.contracts.reduce((sum,c)=>c.total===-1?sum:sum+Math.max(0,c.total-c.used),0);
 const remColor=r=>r<=0?"#9E9E9E":r<=3?"#D32F2F":"#2E7D32";
 const remBg=r=>r<=0?"#F5F5F5":r<=3?"#FFEBEE":"#E8F5E9";
-const isEng=n=>/^[A-Za-z]/.test(n);
 
-// ── Excel 匯出（唯讀 + PIN 遮罩）────────────────────────────
+// ── Excel 匯出 ─────────────────────────────────────────────────
 function exportExcel(students,records){
   const maskPin=p=>p?"●●●●":"(未設定)";
   const rows1=students.map(s=>[s.id,s.name,maskPin(s.pin),s.scheduledToday?"是":"否",s.contracts.length,getTotalRemaining(s)]);
-  const rows2=students.flatMap(s=>s.contracts.map(c=>[s.id,s.name,c.id,c.total,c.used,Math.max(0,c.total-c.used),c.paidDate,c.note||""]));
-  const rows3=records.map(r=>[r.studentId,r.studentName,r.timestamp]);
-
-  const tbl=(caption,headers,rows)=>`
-<table border="1" style="border-collapse:collapse">
-  <caption style="font-weight:bold;margin-bottom:4px">${caption}</caption>
-  <thead><tr>${headers.map(h=>`<th style="background:#1A1A1A;color:#fff;padding:6px 10px">${h}</th>`).join("")}</tr></thead>
-  <tbody>${rows.map(r=>`<tr>${r.map(c=>`<td style="padding:5px 10px">${c}</td>`).join("")}</tr>`).join("")}</tbody>
-</table>`;
-
-  const html=`<html><head><meta charset="UTF-8">
-<style>body{font-family:sans-serif;padding:20px} table{margin-bottom:30px}</style>
-</head><body>
-<h2 style="margin-bottom:4px">教練簽到系統－備份資料</h2>
-<p style="color:#999;font-size:12px;margin-bottom:20px">匯出時間：${getTaiwanTime()}　｜　此檔案僅供查閱，請勿修改數據以確保紀錄正確性。</p>
-${tbl("學員資料",["學員ID","姓名","PIN碼","今日排課","合約數","剩餘總堂數"],rows1)}
-${tbl("合約紀錄",["學員ID","學員姓名","合約ID","總堂數","已用","剩餘","繳費日期","備注"],rows2)}
-${tbl("簽到紀錄",["學員ID","學員姓名","簽到時間"],rows3)}
+  const rows2=students.flatMap(s=>s.contracts.map(c=>[s.id,s.name,c.id,c.total,c.used,Math.max(0,c.total-c.used),c.paidDate,c.note||"",c.signed?"已簽":"未簽"]));
+  const rows3=records.map(r=>[r.studentId,r.studentName,r.timestamp,r.hasSig?"有簽名":"無"]);
+  const tbl=(cap,hdrs,rows)=>`<table border="1" style="border-collapse:collapse;margin-bottom:28px">
+<caption style="font-weight:bold;margin-bottom:4px">${cap}</caption>
+<thead><tr>${hdrs.map(h=>`<th style="background:#1A1A1A;color:#fff;padding:6px 10px">${h}</th>`).join("")}</tr></thead>
+<tbody>${rows.map(r=>`<tr>${r.map(c=>`<td style="padding:5px 10px">${c}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
+  const html=`<html><head><meta charset="UTF-8"><style>body{font-family:sans-serif;padding:20px}</style></head><body>
+<h2>教練簽到系統－備份資料</h2><p style="color:#999;font-size:12px;margin-bottom:20px">匯出時間：${getTaiwanTime()}　此檔案僅供查閱，請勿修改數據。</p>
+${tbl("學員資料",["ID","姓名","PIN","今日排課","合約數","剩餘堂數"],rows1)}
+${tbl("合約紀錄",["學員ID","姓名","合約ID","總堂數","已用","剩餘","繳費日","備注","簽名"],rows2)}
+${tbl("簽到紀錄",["學員ID","姓名","時間","簽名"],rows3)}
 </body></html>`;
-
   const blob=new Blob(["\ufeff"+html],{type:"application/vnd.ms-excel;charset=utf-8"});
   const url=URL.createObjectURL(blob);
+  const a=document.createElement("a");a.href=url;a.download=`簽到備份_${getTaiwanTime().replace(/[: /]/g,"-")}.xls`;a.click();URL.revokeObjectURL(url);
+}
+
+// ── 報表匯出 ───────────────────────────────────────────────────
+function exportMonthlyReport(records, students, yearMonth){
+  // yearMonth: "2026/03"
+  const [y,m]=yearMonth.split("/");
+  const filtered=records.filter(r=>r.timestamp&&r.timestamp.startsWith(yearMonth));
+  // 統計每人出席次數
+  const countMap={};
+  filtered.forEach(r=>{countMap[r.studentName]=(countMap[r.studentName]||0)+1;});
+  const rows=students.map(s=>[s.name,countMap[s.name]||0,getTotalRemaining(s)]);
+  rows.sort((a,b)=>b[1]-a[1]);
+  const detailRows=filtered.map(r=>[r.studentName,r.timestamp]);
+
+  const tbl=(cap,hdrs,rows)=>`<table border="1" style="border-collapse:collapse;margin-bottom:28px">
+<caption style="font-weight:bold;font-size:15px;margin-bottom:6px">${cap}</caption>
+<thead><tr>${hdrs.map(h=>`<th style="background:#1A1A1A;color:#fff;padding:7px 12px">${h}</th>`).join("")}</tr></thead>
+<tbody>${rows.map(r=>`<tr>${r.map(cell=>`<td style="padding:6px 12px">${cell}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
+
+  const html=`<html><head><meta charset="UTF-8"><style>body{font-family:sans-serif;padding:24px}</style></head><body>
+<h2>${y} 年 ${m} 月上課報表</h2>
+<p style="color:#999;font-size:12px;margin-bottom:20px">匯出時間：${getTaiwanTime()}</p>
+${tbl("出席統計",["學員姓名","出席次數","目前剩餘堂數"],rows)}
+${tbl("簽到明細",["學員姓名","簽到時間"],detailRows)}
+</body></html>`;
+  const blob=new Blob(["﻿"+html],{type:"application/vnd.ms-excel;charset=utf-8"});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement("a");a.href=url;a.download=`${y}${m}_上課報表.xls`;a.click();URL.revokeObjectURL(url);
+}
+
+function exportStudentReport(records, student){
+  const myRec=records.filter(r=>String(r.studentId)===String(student.id));
+  const rows=myRec.map(r=>[r.timestamp]);
+  const tbl=(cap,hdrs,rs)=>`<table border="1" style="border-collapse:collapse;margin-bottom:28px">
+<caption style="font-weight:bold;font-size:15px;margin-bottom:6px">${cap}</caption>
+<thead><tr>${hdrs.map(h=>`<th style="background:#1A1A1A;color:#fff;padding:7px 12px">${h}</th>`).join("")}</tr></thead>
+<tbody>${rs.map(r=>`<tr>${r.map(cell=>`<td style="padding:6px 12px">${cell}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
+  const contractRows=student.contracts.map(c=>[c.paidDate,c.total===-1?"待設定":c.total,c.used,Math.max(0,c.total-c.used),c.note||"",c.signed?"已簽":"未簽"]);
+  const html=`<html><head><meta charset="UTF-8"><style>body{font-family:sans-serif;padding:24px}</style></head><body>
+<h2>${student.name} 上課記錄</h2>
+<p style="color:#999;font-size:12px;margin-bottom:20px">匯出時間：${getTaiwanTime()}　共 ${myRec.length} 堂</p>
+${tbl("合約資訊",["繳費日期","總堂數","已用","剩餘","備注","簽名"],contractRows)}
+${tbl("上課日期",["簽到時間"],rows)}
+</body></html>`;
+  const blob=new Blob(["﻿"+html],{type:"application/vnd.ms-excel;charset=utf-8"});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement("a");a.href=url;a.download=`${student.name}_上課記錄.xls`;a.click();URL.revokeObjectURL(url);
+}
+
+// ── 下載簽名圖片 ───────────────────────────────────────────────
+function downloadSig(dataUrl, filename){
   const a=document.createElement("a");
-  a.href=url;
-  a.download=`簽到備份_${getTaiwanTime().replace(/[: ]/g,"-")}.xls`;
+  a.href=dataUrl;
+  a.download=filename;
   a.click();
-  URL.revokeObjectURL(url);
 }
 
 // ── Icons ──────────────────────────────────────────────────────
+const HomeIcon=()=>(
+  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/>
+  </svg>
+);
+const HomeIconGray=()=>(
+  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#BBBBBB" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/>
+  </svg>
+);
+const PlusIcon=()=>(
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#1A1A1A" strokeWidth="2.5" strokeLinecap="round">
+    <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+  </svg>
+);
+const PlusIconGray=()=>(
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#BBBBBB" strokeWidth="2.5" strokeLinecap="round">
+    <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+  </svg>
+);
 const Pencil=({size=16,color="#AAA"})=>(
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
     <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
     <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
-  </svg>
-);
-const PeopleIcon=({active})=>(
-  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke={active?"#1A1A1A":"#CCC"} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-    <circle cx="9" cy="7" r="3"/><path d="M3 21v-2a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v2"/>
-    <path d="M16 3.13a4 4 0 0 1 0 7.75"/><path d="M21 21v-2a4 4 0 0 0-3-3.85"/>
   </svg>
 );
 const ListIcon=({active})=>(
@@ -141,6 +204,12 @@ const GearIcon=({active})=>(
     <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
   </svg>
 );
+const PeopleIcon=({active})=>(
+  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke={active?"#1A1A1A":"#CCC"} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="9" cy="7" r="3"/><path d="M3 21v-2a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v2"/>
+    <path d="M16 3.13a4 4 0 0 1 0 7.75"/><path d="M21 21v-2a4 4 0 0 0-3-3.85"/>
+  </svg>
+);
 
 // ── UI Atoms ───────────────────────────────────────────────────
 function Toast({msg,type,onDone}){
@@ -151,8 +220,8 @@ function Toast({msg,type,onDone}){
 }
 function Modal({title,children,onClose}){
   return(
-    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.4)",zIndex:8000,display:"flex",alignItems:"center",justifyContent:"center",padding:20}} onClick={onClose}>
-      <div style={{background:"#fff",borderRadius:20,padding:24,width:"100%",maxWidth:360,boxShadow:"0 16px 48px rgba(0,0,0,0.15)",maxHeight:"90vh",overflowY:"auto"}} onClick={e=>e.stopPropagation()}>
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",zIndex:8000,display:"flex",alignItems:"center",justifyContent:"center",padding:20}} onClick={onClose}>
+      <div style={{background:"#fff",borderRadius:20,padding:24,width:"100%",maxWidth:360,boxShadow:"0 16px 48px rgba(0,0,0,0.18)",maxHeight:"90vh",overflowY:"auto"}} onClick={e=>e.stopPropagation()}>
         <div style={{fontSize:16,fontWeight:800,color:"#1A1A1A",marginBottom:18}}>{title}</div>
         {children}
       </div>
@@ -160,16 +229,8 @@ function Modal({title,children,onClose}){
   );
 }
 function Btn({children,onClick,variant="dark",full=false,style:s={},disabled=false}){
-  const v={
-    dark:{background:"#1A1A1A",color:"#fff",padding:"13px 18px"},
-    light:{background:"#F2F2F2",color:"#555",padding:"13px 18px"},
-    red:{background:"#FFEBEE",color:"#D32F2F",padding:"13px 18px"},
-    green:{background:"#E8F5E9",color:"#2E7D32",padding:"13px 18px"},
-  };
-  return <button onClick={disabled?undefined:onClick}
-    onMouseDown={e=>{if(!disabled)e.currentTarget.style.opacity="0.65"}}
-    onMouseUp={e=>{if(!disabled)e.currentTarget.style.opacity="1"}}
-    onMouseLeave={e=>{e.currentTarget.style.opacity="1"}}
+  const v={dark:{background:"#1A1A1A",color:"#fff",padding:"13px 18px"},light:{background:"#F2F2F2",color:"#555",padding:"13px 18px"},red:{background:"#FFEBEE",color:"#D32F2F",padding:"13px 18px"},green:{background:"#E8F5E9",color:"#2E7D32",padding:"13px 18px"}};
+  return <button onClick={disabled?undefined:onClick} onMouseDown={e=>{if(!disabled)e.currentTarget.style.opacity="0.65"}} onMouseUp={e=>{if(!disabled)e.currentTarget.style.opacity="1"}} onMouseLeave={e=>{e.currentTarget.style.opacity="1"}}
     style={{border:"none",borderRadius:13,fontSize:15,fontWeight:700,cursor:disabled?"not-allowed":"pointer",transition:"opacity 0.1s",width:full?"100%":undefined,opacity:disabled?0.45:1,...v[variant],...s}}>{children}</button>;
 }
 function Field({label,value,onChange,type="text",placeholder=""}){
@@ -196,14 +257,77 @@ function NumPad({onPress}){
     </div>
   );
 }
-function SyncDot({syncing}){
-  if(!syncing) return null;
-  return <div style={{width:8,height:8,borderRadius:"50%",background:"#FFA000",display:"inline-block",marginLeft:6,verticalAlign:"middle",animation:"spin 1s linear infinite"}}/>;
+
+// ── Signature Canvas ───────────────────────────────────────────
+function SignatureCanvas({onSigned,onClear,height=200}){
+  const canvasRef=useRef(null);
+  const drawing=useRef(false);
+  const hasStroke=useRef(false);
+
+  const getPos=(canvas,e)=>{
+    const rect=canvas.getBoundingClientRect();
+    const src=e.touches?e.touches[0]:e;
+    return{x:(src.clientX-rect.left)*(canvas.width/rect.width),y:(src.clientY-rect.top)*(canvas.height/rect.height)};
+  };
+  const start=e=>{
+    e.preventDefault();
+    const canvas=canvasRef.current;
+    const ctx=canvas.getContext("2d");
+    const pos=getPos(canvas,e);
+    ctx.beginPath();ctx.moveTo(pos.x,pos.y);
+    drawing.current=true;
+  };
+  const move=e=>{
+    e.preventDefault();
+    if(!drawing.current)return;
+    const canvas=canvasRef.current;
+    const ctx=canvas.getContext("2d");
+    ctx.lineWidth=2.5;ctx.lineCap="round";ctx.strokeStyle="#1A1A1A";
+    const pos=getPos(canvas,e);
+    ctx.lineTo(pos.x,pos.y);ctx.stroke();
+    hasStroke.current=true;
+  };
+  const end=e=>{
+    e.preventDefault();
+    drawing.current=false;
+    if(hasStroke.current&&onSigned){
+      onSigned(canvasRef.current.toDataURL("image/png"));
+    }
+  };
+  const clear=()=>{
+    const canvas=canvasRef.current;
+    canvas.getContext("2d").clearRect(0,0,canvas.width,canvas.height);
+    hasStroke.current=false;
+    if(onClear)onClear();
+    if(onSigned)onSigned(null);
+  };
+
+  useEffect(()=>{
+    const canvas=canvasRef.current;
+    const rect=canvas.getBoundingClientRect();
+    canvas.width=rect.width*window.devicePixelRatio||rect.width;
+    canvas.height=height*window.devicePixelRatio||height;
+    const ctx=canvas.getContext("2d");
+    ctx.scale(window.devicePixelRatio||1,window.devicePixelRatio||1);
+  },[]);
+
+  return(
+    <div>
+      <div style={{border:"1.5px solid #DDD",borderRadius:14,overflow:"hidden",background:"#FAFAFA",position:"relative"}}>
+        <canvas ref={canvasRef} style={{display:"block",width:"100%",height:height,cursor:"crosshair"}}
+          onMouseDown={start} onMouseMove={move} onMouseUp={end} onMouseLeave={end}
+          onTouchStart={start} onTouchMove={move} onTouchEnd={end}/>
+        <div style={{position:"absolute",top:"50%",left:"50%",transform:"translate(-50%,-50%)",fontSize:13,color:"#DDD",pointerEvents:"none",userSelect:"none"}}>請在此簽名</div>
+      </div>
+      <button onClick={clear} style={{marginTop:8,background:"none",border:"none",color:"#AAA",fontSize:13,cursor:"pointer",padding:"4px 0"}}>✕ 清除重簽</button>
+    </div>
+  );
 }
+
 function BottomTabs({active,onChange}){
   return(
     <div style={{position:"fixed",bottom:0,left:"50%",transform:"translateX(-50%)",width:"100%",maxWidth:430,background:"#fff",borderTop:"1px solid #F0F0F0",display:"flex"}}>
-      {[{id:"home",label:"學員管理",Icon:PeopleIcon},{id:"records",label:"簽到紀錄",Icon:ListIcon},{id:"settings",label:"備份設定",Icon:GearIcon}].map(({id,label,Icon})=>(
+      {[{id:"coach",label:"學員管理",Icon:PeopleIcon},{id:"records",label:"簽到紀錄",Icon:ListIcon},{id:"settings",label:"備份設定",Icon:GearIcon}].map(({id,label,Icon})=>(
         <button key={id} onClick={()=>onChange(id)} style={{flex:1,padding:"11px 0 9px",background:"none",border:"none",cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:3}}>
           <Icon active={active===id}/>
           <div style={{fontSize:10,fontWeight:active===id?700:400,color:active===id?"#1A1A1A":"#CCC"}}>{label}</div>
@@ -213,25 +337,341 @@ function BottomTabs({active,onChange}){
   );
 }
 
-// ── Coach Home ─────────────────────────────────────────────────
-function CoachHome({students,onSignIn,onEdit,onAdd,onEditSchedule,syncing}){
+// ══════════════════════════════════════════════════════════════
+// 學員首頁：輸入 PIN → 自動比對學員
+// ══════════════════════════════════════════════════════════════
+function StudentHome({students,records,onCheckinDone,onGoCoach,onRegister,syncing,onSignContract}){
+  const [pin,setPin]=useState("");
+  const [error,setError]=useState("");
+  const [shake,setShake]=useState(false);
+  const [matched,setMatched]=useState(null); // 比對到的學員
+  const [sigData,setSigData]=useState(null);
+  const [showConfirm,setShowConfirm]=useState(false);
+  const [checking,setChecking]=useState(false);
+  const [contractSigMap,setContractSigMap]=useState({});
+  const [activeMode,setActiveMode]=useState(null); // null | "contract" | "checkin"
+
+  const doShake=msg=>{setShake(true);setError(msg);setPin("");setTimeout(()=>setShake(false),500);};
+
+  const handleKey=async k=>{
+    if(matched)return; // 已比對到，不再輸入
+    if(k==="⌫"){setPin(c=>c.slice(0,-1));setError("");return;}
+    if(pin.length>=4)return;
+    const next=pin+k;
+    setPin(next);setError("");
+    if(next.length===4){
+      setChecking(true);
+      // 與所有學員比對
+      let found=null;
+      for(const s of students){
+        if(s.pin&&await pinMatches(next,s.pin)){found=s;break;}
+      }
+      setChecking(false);
+      if(found){
+        setMatched(found);
+        setActiveMode(null);
+        setError("");
+      }else{
+        doShake("找不到對應學員，請重試");
+      }
+    }
+  };
+
+  const handleCheckin=()=>{
+    if(!sigData){setError("請先簽名");return;}
+    setShowConfirm(true);
+  };
+  const confirmCheckin=()=>{
+    setShowConfirm(false);
+    const freshStudent=students.find(s=>s.id===matched.id)||matched;
+    onCheckinDone(freshStudent,sigData);
+    setMatched(null);setPin("");setSigData(null);setContractSigMap({});
+  };
+
+  // Always use fresh student data from students array
+  const freshMatched=matched?students.find(s=>s.id===matched.id)||matched:null;
+  const totalRem=freshMatched?getTotalRemaining(freshMatched):0;
+  const myRecords=freshMatched?records.filter(r=>String(r.studentId)===String(freshMatched.id)).slice(-3).reverse():[];
+
+  return(
+    <div style={{minHeight:"100vh",background:"#F7F7F7"}}>
+      {/* Header */}
+      <div style={{background:"#fff",padding:"20px 20px 18px",display:"flex",alignItems:"center",justifyContent:"space-between",borderBottom:"1px solid #F0F0F0"}}>
+        <button onClick={onGoCoach} style={{width:40,height:40,borderRadius:12,background:"#F5F5F5",border:"none",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><HomeIconGray/></button>
+        <div style={{textAlign:"center"}}>
+          <div style={{fontSize:11,letterSpacing:2,color:"#CCC"}}>SIGN IN</div>
+          <div style={{fontSize:18,fontWeight:800,color:"#1A1A1A"}}>學員簽到</div>
+        </div>
+        <button onClick={onRegister} style={{width:40,height:40,borderRadius:12,background:"#F5F5F5",border:"none",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><PlusIconGray/></button>
+      </div>
+
+      {!freshMatched?(
+        /* PIN 輸入區 */
+        <div style={{display:"flex",flexDirection:"column",alignItems:"center",paddingTop:50,paddingBottom:30}}>
+          <div style={{textAlign:"center",marginBottom:40}}>
+            {syncing&&<div style={{fontSize:12,color:"#AAA",marginBottom:16}}>資料同步中…</div>}
+            <div style={{fontSize:26,fontWeight:800,color:"#1A1A1A"}}>輸入你的 PIN 碼</div>
+            <div style={{fontSize:16,color:"#AAA",marginTop:8}}>4 位數字自動登入</div>
+          </div>
+          <div style={{display:"flex",gap:22,marginBottom:16,animation:shake?"shake 0.4s ease":"none"}}>
+            {[0,1,2,3].map(i=><PinDot key={i} filled={i<pin.length}/>)}
+          </div>
+          <div style={{height:28,display:"flex",alignItems:"center",marginBottom:20}}>
+            {checking&&<span style={{color:"#AAA",fontSize:14}}>驗證中…</span>}
+            {error&&!checking&&<span style={{color:"#D32F2F",fontSize:16,fontWeight:600}}>{error}</span>}
+          </div>
+          <NumPad onPress={handleKey}/>
+        </div>
+      ):(
+        /* 學員資料 + 按鈕選擇 */
+        <div style={{padding:"18px 20px 40px"}}>
+          {/* 學員資訊卡 */}
+          <div style={{background:"#fff",borderRadius:16,padding:"18px",marginBottom:14,border:"1px solid #EEE"}}>
+            <div style={{display:"flex",alignItems:"center",gap:14,marginBottom:14}}>
+              <div style={{width:52,height:52,borderRadius:16,background:"#F5F5F5",display:"flex",alignItems:"center",justifyContent:"center",fontSize:24,fontWeight:700,color:"#555"}}>{freshMatched.name[0]}</div>
+              <div>
+                <div style={{fontSize:20,fontWeight:900,color:"#1A1A1A"}}>{freshMatched.name}</div>
+                <div style={{fontSize:12,color:"#AAA",marginTop:2}}>驗證成功 ✓</div>
+              </div>
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+              <div style={{background:remBg(totalRem),borderRadius:12,padding:"14px 10px",textAlign:"center"}}>
+                <div style={{fontSize:28,fontWeight:900,color:remColor(totalRem)}}>{totalRem}</div>
+                <div style={{fontSize:11,color:"#AAA",marginTop:3}}>剩餘堂數</div>
+              </div>
+              <div style={{background:"#F5F5F5",borderRadius:12,padding:"14px 10px",textAlign:"center"}}>
+                <div style={{fontSize:28,fontWeight:900,color:"#1A1A1A"}}>{freshMatched.contracts.reduce((s,c2)=>s+c2.used,0)}</div>
+                <div style={{fontSize:11,color:"#AAA",marginTop:3}}>已上堂數</div>
+              </div>
+            </div>
+            {totalRem<=3&&totalRem>0&&<div style={{marginTop:10,background:"#FFEBEE",borderRadius:10,padding:"9px 12px",color:"#D32F2F",fontSize:13,fontWeight:600,textAlign:"center"}}>⚠️ 堂數即將用完，請洽教練續課</div>}
+            {totalRem<=0&&<div style={{marginTop:10,background:"#F5F5F5",borderRadius:10,padding:"9px 12px",color:"#9E9E9E",fontSize:13,fontWeight:700,textAlign:"center"}}>🚫 堂數已用完，請洽教練續課</div>}
+          </div>
+
+          {/* 最近紀錄 */}
+          {myRecords.length>0&&(
+            <div style={{background:"#fff",borderRadius:14,padding:"14px 16px",marginBottom:14,border:"1px solid #EEE"}}>
+              <div style={{fontSize:11,color:"#AAA",letterSpacing:1.5,fontWeight:600,marginBottom:10}}>最近上課紀錄</div>
+              {myRecords.map(r=>(<div key={r.id} style={{display:"flex",justifyContent:"space-between",marginBottom:6}}><span style={{fontSize:13,color:"#555"}}>{r.timestamp}</span><span style={{fontSize:12,color:"#D32F2F",fontWeight:700}}>−1 堂</span></div>))}
+            </div>
+          )}
+
+          {/* 兩個獨立功能按鈕 */}
+          <div style={{display:"flex",flexDirection:"column",gap:12,marginBottom:14}}>
+            {/* 合約簽署按鈕 - 只有未簽合約時顯示 */}
+            {freshMatched.contracts.filter(c2=>!c2.signed&&c2.total!==-1).length>0&&(
+              <button onClick={()=>setActiveMode(activeMode==="contract"?null:"contract")}
+                style={{background:activeMode==="contract"?"#FFF9C4":"#FFFDE7",border:`2px solid ${activeMode==="contract"?"#F9A825":"#FFE082"}`,borderRadius:14,padding:"14px 16px",cursor:"pointer",textAlign:"left"}}>
+                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+                  <div>
+                    <div style={{fontSize:15,fontWeight:700,color:"#F57F17"}}>📋 合約簽署</div>
+                    <div style={{fontSize:12,color:"#F9A825",marginTop:3}}>有 {freshMatched.contracts.filter(c2=>!c2.signed&&c2.total!==-1).length} 份合約待簽署</div>
+                  </div>
+                  <div style={{fontSize:18,color:"#F9A825"}}>{activeMode==="contract"?"▲":"▼"}</div>
+                </div>
+              </button>
+            )}
+
+            {/* 合約簽署展開區 */}
+            {activeMode==="contract"&&freshMatched.contracts.filter(c2=>!c2.signed&&c2.total!==-1).map(c2=>(
+              <div key={c2.id} style={{background:"#fff",border:"1px solid #EEE",borderRadius:14,padding:"16px"}}>
+                <div style={{fontSize:13,color:"#555",marginBottom:10}}>合約：{c2.paidDate}（{c2.total} 堂）{c2.note?" ／ "+c2.note:""}</div>
+                {contractSigMap[c2.id]
+                  ?<div style={{display:"flex",alignItems:"center",justifyContent:"space-between",background:"#E8F5E9",borderRadius:10,padding:"10px 14px"}}>
+                    <span style={{fontSize:13,color:"#2E7D32",fontWeight:700}}>✓ 已簽名</span>
+                    <Btn variant="green" style={{fontSize:12,padding:"6px 14px"}} onClick={()=>onSignContract(freshMatched,c2.id,contractSigMap[c2.id])}>確認送出</Btn>
+                   </div>
+                  :<><SignatureCanvas onSigned={sd=>setContractSigMap(m=>({...m,[c2.id]:sd}))} height={120}/>
+                    <Btn full variant="green" style={{marginTop:8,fontSize:13,padding:"10px"}} disabled={!contractSigMap[c2.id]} onClick={()=>{onSignContract(freshMatched,c2.id,contractSigMap[c2.id]);setContractSigMap(m=>({...m,[c2.id]:contractSigMap[c2.id]}));}}>確認簽署此合約</Btn>
+                  </>
+                }
+              </div>
+            ))}
+
+            {/* 上課簽到按鈕 */}
+            {totalRem>0&&(
+              <button onClick={()=>setActiveMode(activeMode==="checkin"?null:"checkin")}
+                style={{background:activeMode==="checkin"?"#E8F5E9":"#F1F8E9",border:`2px solid ${activeMode==="checkin"?"#43A047":"#A5D6A7"}`,borderRadius:14,padding:"14px 16px",cursor:"pointer",textAlign:"left"}}>
+                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+                  <div>
+                    <div style={{fontSize:15,fontWeight:700,color:"#2E7D32"}}>✍ 上課簽到</div>
+                    <div style={{fontSize:12,color:"#66BB6A",marginTop:3}}>手寫簽名確認今日上課</div>
+                  </div>
+                  <div style={{fontSize:18,color:"#43A047"}}>{activeMode==="checkin"?"▲":"▼"}</div>
+                </div>
+              </button>
+            )}
+
+            {/* 簽到展開區 */}
+            {activeMode==="checkin"&&totalRem>0&&(
+              <div style={{background:"#fff",borderRadius:14,padding:"16px",border:"1px solid #EEE"}}>
+                <div style={{fontSize:13,color:"#888",marginBottom:12}}>請在下方簽名確認今日上課</div>
+                <SignatureCanvas onSigned={setSigData} height={160}/>
+                {error&&<div style={{color:"#D32F2F",fontSize:13,marginTop:8,fontWeight:600}}>{error}</div>}
+                <Btn full style={{marginTop:14}} disabled={!sigData} onClick={handleCheckin}>確認簽到</Btn>
+              </div>
+            )}
+          </div>
+
+          <Btn full variant="light" onClick={()=>{setMatched(null);setPin("");setSigData(null);setContractSigMap({});setActiveMode(null);setError("");}}>← 返回</Btn>
+        </div>
+      )}
+
+      {showConfirm&&freshMatched&&(
+        <Modal title="確認簽到" onClose={()=>setShowConfirm(false)}>
+          <div style={{fontSize:14,color:"#666",marginBottom:14,lineHeight:1.9}}>確定登記 <strong>{freshMatched.name}</strong> 今日上課？<br/>簽到後剩餘 <strong style={{color:remColor(totalRem-1)}}>{Math.max(0,totalRem-1)} 堂</strong>。</div>
+          {sigData&&(
+            <div style={{marginBottom:14}}>
+              <img src={sigData} style={{width:"100%",border:"1px solid #EEE",borderRadius:10}}/>
+            </div>
+          )}
+          <div style={{display:"flex",gap:10}}>
+            <Btn variant="light" style={{flex:1}} onClick={()=>setShowConfirm(false)}>取消</Btn>
+            <Btn style={{flex:2}} onClick={confirmCheckin}>✓ 確認</Btn>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════
+// 學員自助登錄（首次）
+// ══════════════════════════════════════════════════════════════
+function StudentRegister({onDone,onBack,existingNames,existingStudents}){
+  const [name,setName]=useState("");
+  const [pin,setPin]=useState("");
+  const [conf,setConf]=useState("");
+  const [step,setStep]=useState("info"); // info | pin | confirm
+  const [err,setErr]=useState("");
+  const pinRef=useRef("");
+
+  const handleNext=()=>{
+    if(!name.trim()){setErr("請輸入姓名");return;}
+    if(existingNames.includes(name.trim())){setErr("此姓名已存在");return;}
+    setErr("");setStep("pin");
+  };
+  const handleKey=async k=>{
+    if(k==="⌫"){
+      if(step==="confirm")setConf(c=>c.slice(0,-1));
+      else setPin(c=>c.slice(0,-1));
+      setErr("");return;
+    }
+    const cur=step==="confirm"?conf:pin;
+    if(cur.length>=4)return;
+    const next=cur+k;
+    if(step==="confirm")setConf(next);
+    else{setPin(next);pinRef.current=next;}
+    setErr("");
+    if(next.length===4){
+      setTimeout(async()=>{
+        if(step==="pin"){setStep("confirm");setConf("");}
+        else{
+          if(next===pinRef.current){
+            const hashed=await hashPin(pinRef.current);
+            onDone({id:String(Date.now()),name:name.trim(),pin:hashed,scheduledToday:false,contracts:[{id:Date.now()+1,total:-1,used:0,paidDate:new Date().toISOString().split("T")[0],note:"首次登錄，教練待設定"}]});
+          }else{
+            setErr("兩次 PIN 不一致");setConf("");setPin("");pinRef.current="";setStep("pin");
+          }
+        }
+      },120);
+    }
+  };
+  const display=step==="confirm"?conf:pin;
+
+  return(
+    <div style={{minHeight:"100vh",background:"#fff"}}>
+      <div style={{background:"#fff",padding:"20px 20px 18px",display:"flex",alignItems:"center",gap:14,borderBottom:"1px solid #F0F0F0"}}>
+        <button onClick={onBack} style={{background:"none",border:"none",color:"#AAA",fontSize:14,cursor:"pointer",padding:0}}>← 返回</button>
+        <div style={{fontSize:17,fontWeight:800,color:"#1A1A1A"}}>學員首次登錄</div>
+      </div>
+      {step==="info"?(
+        <div style={{padding:"30px 24px"}}>
+          <div style={{fontSize:15,color:"#888",marginBottom:24,lineHeight:1.8}}>請輸入姓名並設定 PIN 碼，<br/>合約詳情由教練協助完成。</div>
+          <Field label="姓名" value={name} onChange={v=>{setName(v);setErr("");}} placeholder="請輸入你的姓名"/>
+          {err&&<div style={{background:"#FFEBEE",borderRadius:10,padding:"10px 14px",marginBottom:14,fontSize:13,color:"#D32F2F",fontWeight:600}}>⚠ {err}</div>}
+          <Btn full onClick={handleNext}>下一步：設定 PIN 碼</Btn>
+        </div>
+      ):(
+        <div style={{display:"flex",flexDirection:"column",alignItems:"center",paddingTop:40}}>
+          <div style={{textAlign:"center",marginBottom:36}}>
+            <div style={{fontSize:10,color:"#F9A825",letterSpacing:2,fontWeight:700,marginBottom:8}}>學員：{name}</div>
+            <div style={{fontSize:24,fontWeight:800,color:"#1A1A1A"}}>{step==="pin"?"設定 PIN 碼":"再輸入一次確認"}</div>
+            <div style={{fontSize:15,color:"#AAA",marginTop:8}}>{step==="pin"?"請輸入 4 位數字":"請再次輸入確認"}</div>
+          </div>
+          <div style={{display:"flex",gap:22,marginBottom:14}}>
+            {[0,1,2,3].map(i=><PinDot key={i} filled={i<display.length}/>)}
+          </div>
+          <div style={{height:28,display:"flex",alignItems:"center",marginBottom:20}}>
+            {err&&<span style={{color:"#D32F2F",fontSize:15,fontWeight:600}}>{err}</span>}
+          </div>
+          <NumPad onPress={handleKey}/>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════
+// 教練入口 PIN
+// ══════════════════════════════════════════════════════════════
+function CoachPinGate({onSuccess,onBack}){
+  const [pin,setPin]=useState("");
+  const [error,setError]=useState("");
+  const [shake,setShake]=useState(false);
+  const doShake=msg=>{setShake(true);setError(msg);setPin("");setTimeout(()=>setShake(false),500);};
+  const handleKey=k=>{
+    if(k==="⌫"){setPin(c=>c.slice(0,-1));setError("");return;}
+    if(pin.length>=4)return;
+    const next=pin+k;setPin(next);setError("");
+    if(next.length===4){
+      setTimeout(()=>{next===COACH_PIN?onSuccess():doShake("密碼錯誤");},120);
+    }
+  };
+  return(
+    <div style={{minHeight:"100vh",background:"#fff",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center"}}>
+      <button onClick={onBack} style={{position:"absolute",top:28,left:20,background:"none",border:"none",color:"#AAA",fontSize:14,cursor:"pointer"}}>← 返回</button>
+      <div style={{textAlign:"center",marginBottom:44}}>
+        <div style={{width:68,height:68,borderRadius:20,background:"#1A1A1A",display:"flex",alignItems:"center",justifyContent:"center",fontSize:28,margin:"0 auto 20px"}}>🏠</div>
+        <div style={{fontSize:24,fontWeight:800,color:"#1A1A1A"}}>教練管理</div>
+        <div style={{fontSize:15,color:"#AAA",marginTop:8}}>請輸入管理密碼</div>
+      </div>
+      <div style={{display:"flex",gap:22,marginBottom:14,animation:shake?"shake 0.4s ease":"none"}}>
+        {[0,1,2,3].map(i=><PinDot key={i} filled={i<pin.length}/>)}
+      </div>
+      <div style={{height:28,display:"flex",alignItems:"center",marginBottom:20}}>
+        {error&&<span style={{color:"#D32F2F",fontSize:16,fontWeight:600}}>{error}</span>}
+      </div>
+      <NumPad onPress={handleKey}/>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════
+// 教練主頁
+// ══════════════════════════════════════════════════════════════
+function CoachHome({students,onEdit,onAdd,onEditSchedule,onBack,syncing}){
   const [search,setSearch]=useState("");
+  const isEng=n=>/^[A-Za-z]/.test(n);
   const sorted=[...students].filter(s=>s.name.includes(search)).sort((a,b)=>{
-    if(a.scheduledToday!==b.scheduledToday) return b.scheduledToday-a.scheduledToday;
+    if(a.scheduledToday!==b.scheduledToday)return b.scheduledToday-a.scheduledToday;
     const aE=isEng(a.name),bE=isEng(b.name);
-    if(aE!==bE) return aE?-1:1;
+    if(aE!==bE)return aE?-1:1;
     return a.name.localeCompare(b.name,aE?"en":"zh-TW-u-co-stroke");
   });
   return(
     <div style={{minHeight:"100vh",background:"#F7F7F7"}}>
-      <div style={{background:"#fff",padding:"28px 20px 18px",borderBottom:"1px solid #EEE"}}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
-          <div>
-            <div style={{fontSize:11,letterSpacing:2,color:"#CCC",marginBottom:3}}>COACH DASHBOARD</div>
+      <div style={{background:"#fff",padding:"24px 20px 18px",borderBottom:"1px solid #EEE"}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16}}>
+          <div style={{display:"flex",alignItems:"center",gap:12}}>
+            <button onClick={()=>onBack("student")} style={{width:36,height:36,borderRadius:11,background:"#F5F5F5",border:"none",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#888" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+            </button>
+            <div>
             <div style={{display:"flex",alignItems:"center",gap:8}}>
-              <div style={{fontSize:24,fontWeight:900,color:"#1A1A1A"}}>學員管理</div>
-              <SyncDot syncing={syncing}/>
-              {!syncing&&<div style={{fontSize:10,background:"#E8F5E9",color:"#2E7D32",padding:"2px 8px",borderRadius:10,fontWeight:700}}>☁ 雲端</div>}
+              <div style={{fontSize:22,fontWeight:900,color:"#1A1A1A"}}>學員管理</div>
+              {syncing&&<div style={{width:10,height:10,borderRadius:"50%",border:"2px solid #EEE",borderTop:"2px solid #1A1A1A",animation:"spin 0.8s linear infinite"}}/>}
+            </div>
             </div>
           </div>
           <div style={{display:"flex",gap:8}}>
@@ -239,7 +679,8 @@ function CoachHome({students,onSignIn,onEdit,onAdd,onEditSchedule,syncing}){
             <button onClick={onAdd} style={{background:"#1A1A1A",border:"none",color:"#fff",width:38,height:38,borderRadius:12,fontSize:22,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}>+</button>
           </div>
         </div>
-        <div style={{display:"flex",gap:10}}>
+        </div>
+        <div style={{display:"flex",gap:10,marginBottom:14}}>
           {[{label:"今日排課",val:students.filter(s=>s.scheduledToday).length},{label:"總學員數",val:students.length}].map(({label,val})=>(
             <div key={label} style={{flex:1,background:"#F2F2F2",borderRadius:12,padding:"11px 10px",textAlign:"center"}}>
               <div style={{fontSize:20,fontWeight:900,color:"#1A1A1A"}}>{val}</div>
@@ -247,65 +688,82 @@ function CoachHome({students,onSignIn,onEdit,onAdd,onEditSchedule,syncing}){
             </div>
           ))}
         </div>
-      </div>
-      <div style={{padding:"14px 20px 6px"}}>
         <div style={{position:"relative"}}>
           <span style={{position:"absolute",left:13,top:"50%",transform:"translateY(-50%)",color:"#CCC"}}>🔍</span>
           <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="搜尋學員…"
-            style={{width:"100%",padding:"11px 14px 11px 38px",background:"#fff",border:"1px solid #EEE",borderRadius:12,fontSize:14,outline:"none"}}/>
+            style={{width:"100%",padding:"11px 14px 11px 38px",background:"#F7F7F7",border:"1px solid #EEE",borderRadius:12,fontSize:14,outline:"none"}}/>
         </div>
       </div>
-      <div style={{padding:"8px 20px 100px"}}>
-        {!search&&sorted.some(s=>s.scheduledToday)&&<div style={{fontSize:10,color:"#CCC",letterSpacing:2,marginBottom:8,marginTop:4}}>今日排課</div>}
+      <div style={{padding:"12px 20px 100px"}}>
         {sorted.map((s,i)=>{
-          const rem=getTotalRemaining(s),c=remColor(rem),bg=remBg(rem);
+          const rem=getTotalRemaining(s);
           const showSep=!search&&i>0&&!s.scheduledToday&&sorted[i-1]?.scheduledToday;
           return(
             <div key={s.id}>
-              {showSep&&<div style={{fontSize:10,color:"#CCC",letterSpacing:2,margin:"14px 0 8px"}}>其他學員</div>}
-              <div style={{background:"#fff",border:"1px solid #EEE",borderRadius:15,padding:"13px 15px",marginBottom:8,display:"flex",alignItems:"center",boxShadow:"0 1px 3px rgba(0,0,0,0.04)"}}>
-                <div onClick={()=>onSignIn(s)} style={{display:"flex",alignItems:"center",flex:1,cursor:"pointer",minWidth:0}}>
-                  <div style={{width:42,height:42,borderRadius:13,background:"#F5F5F5",display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,fontWeight:700,color:"#666",marginRight:12,flexShrink:0}}>{s.name[0]}</div>
-                  <div style={{minWidth:0}}>
+              {showSep&&<div style={{fontSize:10,color:"#CCC",letterSpacing:2,margin:"12px 0 8px"}}>其他學員</div>}
+              {i===0&&!search&&s.scheduledToday&&<div style={{fontSize:10,color:"#CCC",letterSpacing:2,marginBottom:8}}>今日排課</div>}
+              <div style={{background:"#fff",border:"1px solid #EEE",borderRadius:15,padding:"13px 15px",marginBottom:8,display:"flex",alignItems:"center"}}>
+                <div style={{flex:1,display:"flex",alignItems:"center",gap:12}}>
+                  <div style={{width:42,height:42,borderRadius:13,background:"#F5F5F5",display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,fontWeight:700,color:"#666",flexShrink:0}}>{s.name[0]}</div>
+                  <div>
                     <div style={{display:"flex",alignItems:"center",gap:7}}>
                       <span style={{fontWeight:700,fontSize:15,color:"#1A1A1A"}}>{s.name}</span>
                       {s.pin===null&&<span style={{fontSize:9,background:"#FFF9C4",color:"#F9A825",padding:"2px 6px",borderRadius:8,fontWeight:700}}>未設PIN</span>}
+                      {s.contracts.some(c=>c.total===-1)&&<span style={{fontSize:9,background:"#F3E5F5",color:"#7B1FA2",padding:"2px 6px",borderRadius:8,fontWeight:700}}>待設定</span>}
                     </div>
-                    <div style={{fontSize:11,color:"#DDD",marginTop:2}}>點擊簽到</div>
+                    <div style={{fontSize:11,color:"#CCC",marginTop:2}}>剩餘 {rem} 堂</div>
                   </div>
                 </div>
-                <div onClick={()=>onSignIn(s)} style={{background:bg,borderRadius:10,padding:"4px 10px",flexShrink:0,textAlign:"center",cursor:"pointer",marginRight:10}}>
-                  <span style={{fontSize:17,fontWeight:900,color:c}}>{rem}</span>
+                <div style={{background:remBg(rem),borderRadius:10,padding:"4px 12px",marginRight:10,textAlign:"center"}}>
+                  <span style={{fontSize:17,fontWeight:900,color:remColor(rem)}}>{rem}</span>
                 </div>
-                <button onClick={e=>{e.stopPropagation();onEdit(s);}} style={{width:34,height:34,borderRadius:10,background:"#F5F5F5",border:"none",cursor:"pointer",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center"}}><Pencil/></button>
+                <button onClick={()=>onEdit(s)} style={{width:34,height:34,borderRadius:10,background:"#F5F5F5",border:"none",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Pencil/></button>
               </div>
             </div>
           );
         })}
         {sorted.length===0&&<div style={{textAlign:"center",color:"#CCC",padding:"50px 0"}}>找不到「{search}」</div>}
       </div>
+      <div style={{position:"fixed",bottom:0,left:"50%",transform:"translateX(-50%)",width:"100%",maxWidth:430,background:"#fff",borderTop:"1px solid #F0F0F0",display:"flex"}}>
+        {[{id:"coach",label:"學員管理",Icon:PeopleIcon},{id:"records",label:"簽到紀錄",Icon:ListIcon},{id:"settings",label:"備份設定",Icon:GearIcon}].map(({id,label,Icon})=>(
+          <button key={id} onClick={()=>onBack(id)} style={{flex:1,padding:"11px 0 9px",background:"none",border:"none",cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:3}}>
+            <Icon active={id==="coach"}/>
+            <div style={{fontSize:10,fontWeight:id==="coach"?700:400,color:id==="coach"?"#1A1A1A":"#CCC"}}>{label}</div>
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
 
-// ── Coach Detail ───────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════
+// 教練學員詳情
+// ══════════════════════════════════════════════════════════════
 function CoachDetail({student,records,onBack,onUpdate,onDelete,showToast}){
-  const [showAdd,setShowAdd]=useState(false);
+  const [showAddC,setShowAddC]=useState(false);
   const [showResetPin,setShowResetPin]=useState(false);
   const [showDel,setShowDel]=useState(false);
+  const [showContractSig,setShowContractSig]=useState(null); // contract id
   const [editName,setEditName]=useState(student.name);
   const [editingName,setEditingName]=useState(false);
+  const [contractSigData,setContractSigData]=useState(null);
   const [form,setForm]=useState({total:"",paidDate:new Date().toISOString().split("T")[0],note:""});
   const idRef=useRef(Date.now());
   const totalRem=getTotalRemaining(student);
   const myRecords=records.filter(r=>String(r.studentId)===String(student.id)).slice(-5).reverse();
   const save=updated=>{onUpdate(updated);showToast("✅ 已儲存");};
+
   const handleAddContract=()=>{
-    if(!form.total||Number(form.total)<1) return;
-    save({...student,contracts:[...student.contracts,{id:idRef.current++,total:Number(form.total),used:0,paidDate:form.paidDate,note:form.note}]});
-    setForm({total:"",paidDate:new Date().toISOString().split("T")[0],note:""});
-    setShowAdd(false);
+    if(!form.total||Number(form.total)<1)return;
+    save({...student,contracts:[...student.contracts,{id:idRef.current++,total:Number(form.total),used:0,paidDate:form.paidDate,note:form.note,signed:false,sigData:null}]});
+    setForm({total:"",paidDate:new Date().toISOString().split("T")[0],note:""});setShowAddC(false);
   };
+  const handleSignContract=cid=>{
+    if(!contractSigData){showToast("請先簽名","warn");return;}
+    save({...student,contracts:student.contracts.map(c=>c.id===cid?{...c,signed:true,sigData:contractSigData,signedAt:getTaiwanTime()}:c)});
+    setShowContractSig(null);setContractSigData(null);
+  };
+
   return(
     <div style={{minHeight:"100vh",background:"#F7F7F7"}}>
       <div style={{background:"#fff",padding:"24px 20px 18px",borderBottom:"1px solid #EEE"}}>
@@ -316,12 +774,9 @@ function CoachDetail({student,records,onBack,onUpdate,onDelete,showToast}){
             <div>
               {editingName?(
                 <div style={{display:"flex",gap:8,alignItems:"center"}}>
-                  <input value={editName} onChange={e=>setEditName(e.target.value)}
-                    style={{fontSize:18,fontWeight:800,border:"none",borderBottom:"2px solid #1A1A1A",outline:"none",padding:"2px 4px",width:120}}/>
-                  <button onClick={()=>{setEditingName(false);save({...student,name:editName});}}
-                    style={{background:"#1A1A1A",border:"none",color:"#fff",padding:"4px 10px",borderRadius:8,fontSize:12,cursor:"pointer",fontWeight:600}}>✓</button>
-                  <button onClick={()=>{setEditName(student.name);setEditingName(false);}}
-                    style={{background:"#F2F2F2",border:"none",color:"#888",padding:"4px 10px",borderRadius:8,fontSize:12,cursor:"pointer"}}>✕</button>
+                  <input value={editName} onChange={e=>setEditName(e.target.value)} style={{fontSize:18,fontWeight:800,border:"none",borderBottom:"2px solid #1A1A1A",outline:"none",padding:"2px 4px",width:120}}/>
+                  <button onClick={()=>{setEditingName(false);save({...student,name:editName});}} style={{background:"#1A1A1A",border:"none",color:"#fff",padding:"4px 10px",borderRadius:8,fontSize:12,cursor:"pointer",fontWeight:600}}>✓</button>
+                  <button onClick={()=>{setEditName(student.name);setEditingName(false);}} style={{background:"#F2F2F2",border:"none",color:"#888",padding:"4px 10px",borderRadius:8,fontSize:12,cursor:"pointer"}}>✕</button>
                 </div>
               ):(
                 <div style={{display:"flex",alignItems:"center",gap:8}}>
@@ -341,52 +796,91 @@ function CoachDetail({student,records,onBack,onUpdate,onDelete,showToast}){
           </div>
         </div>
       </div>
+
       <div style={{padding:"18px 20px 100px"}}>
+        {/* 合約 */}
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
           <div style={{fontSize:12,color:"#AAA",letterSpacing:1.5,fontWeight:600}}>合約記錄</div>
-          <button onClick={()=>setShowAdd(true)} style={{background:"#1A1A1A",border:"none",color:"#fff",padding:"6px 14px",borderRadius:10,fontSize:12,fontWeight:700,cursor:"pointer"}}>＋ 新增合約</button>
+          <button onClick={()=>setShowAddC(true)} style={{background:"#1A1A1A",border:"none",color:"#fff",padding:"6px 14px",borderRadius:10,fontSize:12,fontWeight:700,cursor:"pointer"}}>＋ 新增合約</button>
         </div>
         {student.contracts.map(c=>{
           const rem=Math.max(0,c.total-c.used);
-          const active=student.contracts.find(x=>x.total-x.used>0);
+          const active=student.contracts.find(x=>x.total>0&&x.total-x.used>0);
           const isCurrent=active&&c.id===active.id;
+          const isPending=c.total===-1;
           return(
             <div key={c.id} style={{background:"#fff",border:`1px solid ${isCurrent?"#1A1A1A":"#EEE"}`,borderRadius:14,padding:"14px 15px",marginBottom:8}}>
-              <div style={{display:"flex",justifyContent:"space-between"}}>
-                <div>
-                  <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:4}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+                <div style={{flex:1}}>
+                  <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:4,flexWrap:"wrap"}}>
                     {isCurrent&&<span style={{fontSize:9,background:"#1A1A1A",color:"#fff",padding:"2px 7px",borderRadius:10}}>使用中</span>}
-                    {!isCurrent&&rem===0&&<span style={{fontSize:9,background:"#F5F5F5",color:"#AAA",padding:"2px 7px",borderRadius:10}}>已結束</span>}
+                    {isPending&&<span style={{fontSize:9,background:"#F3E5F5",color:"#7B1FA2",padding:"2px 7px",borderRadius:10}}>待設定</span>}
+                    {!isCurrent&&!isPending&&rem===0&&<span style={{fontSize:9,background:"#F5F5F5",color:"#AAA",padding:"2px 7px",borderRadius:10}}>已結束</span>}
+                    {c.signed&&<span style={{fontSize:9,background:"#E8F5E9",color:"#2E7D32",padding:"2px 7px",borderRadius:10}}>已簽名</span>}
+                    {!c.signed&&!isPending&&<span style={{fontSize:9,background:"#FFF9C4",color:"#F57F17",padding:"2px 7px",borderRadius:10}}>未簽名</span>}
                     {c.note&&<span style={{fontSize:12,color:"#888"}}>{c.note}</span>}
                   </div>
                   <div style={{fontSize:12,color:"#AAA"}}>繳費日：{c.paidDate}</div>
+                  {c.signedAt&&<div style={{fontSize:11,color:"#2E7D32",marginTop:2}}>簽名時間：{c.signedAt}</div>}
                 </div>
-                <div style={{textAlign:"right"}}>
-                  <span style={{fontSize:20,fontWeight:900,color:remColor(rem)}}>{rem}</span>
-                  <span style={{fontSize:12,color:"#CCC"}}>/{c.total}</span>
-                  <div style={{fontSize:10,color:"#AAA"}}>已上 {c.used} 堂</div>
+                <div style={{textAlign:"right",flexShrink:0,marginLeft:10}}>
+                  {isPending?<div style={{fontSize:13,color:"#7B1FA2",fontWeight:700}}>待設定</div>
+                  :<><span style={{fontSize:20,fontWeight:900,color:remColor(rem)}}>{rem}</span><span style={{fontSize:12,color:"#CCC"}}>/{c.total}</span><div style={{fontSize:10,color:"#AAA"}}>已上 {c.used} 堂</div></>}
                 </div>
               </div>
+              {!c.signed&&!isPending&&(
+                <button onClick={()=>{setShowContractSig(c.id);setContractSigData(null);}} style={{marginTop:10,background:"#E8F5E9",border:"none",color:"#2E7D32",padding:"7px 14px",borderRadius:10,fontSize:12,fontWeight:700,cursor:"pointer",width:"100%"}}>✍ 請學員簽名確認合約</button>
+              )}
+              {c.signed&&c.sigData&&(
+                <div style={{marginTop:10}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+                    <div style={{fontSize:11,color:"#AAA"}}>學員簽名：</div>
+                    <button onClick={()=>downloadSig(c.sigData,`合約簽名_${student.name}_${c.paidDate}.png`)} style={{background:"none",border:"none",color:"#2E7D32",fontSize:12,fontWeight:700,cursor:"pointer"}}>⬇ 下載圖片</button>
+                  </div>
+                  <img src={c.sigData} style={{width:"100%",border:"1px solid #EEE",borderRadius:8,background:"#FAFAFA"}}/>
+                </div>
+              )}
             </div>
           );
         })}
+
         {myRecords.length>0&&(<>
           <div style={{fontSize:12,color:"#AAA",letterSpacing:1.5,fontWeight:600,marginTop:20,marginBottom:10}}>最近上課紀錄</div>
-          {myRecords.map(r=>(<div key={r.id} style={{background:"#fff",border:"1px solid #EEE",borderRadius:11,padding:"11px 14px",marginBottom:6,display:"flex",justifyContent:"space-between",alignItems:"center"}}><span style={{fontSize:13,color:"#555"}}>{r.timestamp}</span><span style={{fontSize:12,color:"#D32F2F",fontWeight:700}}>−1 堂</span></div>))}
+          {myRecords.map(r=>(<div key={r.id} style={{background:"#fff",border:"1px solid #EEE",borderRadius:11,padding:"11px 14px",marginBottom:6}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <span style={{fontSize:13,color:"#555"}}>{r.timestamp}</span>
+              <span style={{fontSize:12,color:"#D32F2F",fontWeight:700}}>−1 堂</span>
+            </div>
+            {r.sigData&&<img src={r.sigData} style={{width:"100%",marginTop:6,border:"1px solid #EEE",borderRadius:6,background:"#FAFAFA"}}/>}
+          </div>))}
         </>)}
+
         <div style={{marginTop:24}}><Btn variant="red" full onClick={()=>setShowDel(true)}>刪除此學員</Btn></div>
       </div>
-      {showAdd&&(<Modal title="新增合約" onClose={()=>setShowAdd(false)}>
+
+      {/* 新增合約 Modal */}
+      {showAddC&&(<Modal title="新增合約" onClose={()=>setShowAddC(false)}>
         <Field label="合約總堂數" value={form.total} onChange={v=>setForm(f=>({...f,total:v}))} type="number" placeholder="例：10"/>
         <Field label="繳費日期" value={form.paidDate} onChange={v=>setForm(f=>({...f,paidDate:v}))} type="date"/>
         <Field label="備注" value={form.note} onChange={v=>setForm(f=>({...f,note:v}))} placeholder="例：第二期…"/>
         <div style={{display:"flex",gap:10,marginTop:8}}>
-          <Btn variant="light" style={{flex:1}} onClick={()=>setShowAdd(false)}>取消</Btn>
+          <Btn variant="light" style={{flex:1}} onClick={()=>setShowAddC(false)}>取消</Btn>
           <Btn style={{flex:2}} onClick={handleAddContract}>新增合約</Btn>
         </div>
       </Modal>)}
+
+      {/* 合約簽名 Modal */}
+      {showContractSig&&(<Modal title="合約簽名" onClose={()=>{setShowContractSig(null);setContractSigData(null);}}>
+        <div style={{fontSize:13,color:"#666",marginBottom:14,lineHeight:1.8}}>請學員在下方簽名，確認合約內容。</div>
+        <SignatureCanvas onSigned={setContractSigData} height={140}/>
+        <div style={{display:"flex",gap:10,marginTop:14}}>
+          <Btn variant="light" style={{flex:1}} onClick={()=>{setShowContractSig(null);setContractSigData(null);}}>取消</Btn>
+          <Btn style={{flex:2}} disabled={!contractSigData} onClick={()=>handleSignContract(showContractSig)}>確認簽名</Btn>
+        </div>
+      </Modal>)}
+
       {showResetPin&&(<Modal title="重設 PIN 碼" onClose={()=>setShowResetPin(false)}>
-        <div style={{fontSize:14,color:"#666",marginBottom:20,lineHeight:1.9}}>確定重設 <strong>{student.name}</strong> 的 PIN 碼？<br/><span style={{fontSize:12,color:"#AAA"}}>學員下次簽到時將自行設定新密碼。</span></div>
+        <div style={{fontSize:14,color:"#666",marginBottom:20,lineHeight:1.9}}>確定重設 <strong>{student.name}</strong> 的 PIN 碼？</div>
         <div style={{display:"flex",gap:10}}>
           <Btn variant="light" style={{flex:1}} onClick={()=>setShowResetPin(false)}>取消</Btn>
           <Btn style={{flex:1}} onClick={()=>{setShowResetPin(false);save({...student,pin:null});}}>確認重設</Btn>
@@ -403,62 +897,26 @@ function CoachDetail({student,records,onBack,onUpdate,onDelete,showToast}){
   );
 }
 
-// ── Edit Schedule ──────────────────────────────────────────────
-function EditSchedule({students,onSave,onBack}){
-  const [sel,setSel]=useState(new Set(students.filter(s=>s.scheduledToday).map(s=>s.id)));
-  const toggle=id=>setSel(prev=>{const n=new Set(prev);n.has(id)?n.delete(id):n.add(id);return n;});
-  return(
-    <div style={{minHeight:"100vh",background:"#F7F7F7"}}>
-      <div style={{background:"#fff",padding:"28px 20px 18px",borderBottom:"1px solid #EEE"}}>
-        <button onClick={onBack} style={{background:"none",border:"none",color:"#AAA",fontSize:14,cursor:"pointer",padding:0,marginBottom:14}}>← 返回</button>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
-          <div><div style={{fontSize:20,fontWeight:900,color:"#1A1A1A"}}>今日排課學員</div><div style={{fontSize:12,color:"#AAA",marginTop:4}}>已選 {sel.size} 位</div></div>
-          <div style={{display:"flex",gap:8}}>
-            <button onClick={()=>setSel(new Set())} style={{background:"#F2F2F2",border:"none",color:"#888",padding:"7px 12px",borderRadius:10,fontSize:12,fontWeight:600,cursor:"pointer"}}>全取消</button>
-            <button onClick={()=>setSel(new Set(students.map(s=>s.id)))} style={{background:"#F2F2F2",border:"none",color:"#888",padding:"7px 12px",borderRadius:10,fontSize:12,fontWeight:600,cursor:"pointer"}}>全選</button>
-          </div>
-        </div>
-      </div>
-      <div style={{padding:"14px 20px 100px"}}>
-        {students.map(s=>(
-          <div key={s.id} onClick={()=>toggle(s.id)} style={{background:"#fff",border:`1.5px solid ${sel.has(s.id)?"#1A1A1A":"#EEE"}`,borderRadius:14,padding:"13px 15px",marginBottom:8,cursor:"pointer",display:"flex",alignItems:"center",gap:12}}>
-            <div style={{width:22,height:22,borderRadius:6,border:`2px solid ${sel.has(s.id)?"#1A1A1A":"#DDD"}`,background:sel.has(s.id)?"#1A1A1A":"transparent",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
-              {sel.has(s.id)&&<span style={{color:"#fff",fontSize:13}}>✓</span>}
-            </div>
-            <div style={{flex:1}}>
-              <div style={{fontWeight:700,fontSize:15,color:"#1A1A1A"}}>{s.name}</div>
-              <div style={{fontSize:11,color:"#CCC",marginTop:1}}>剩餘 {getTotalRemaining(s)} 堂</div>
-            </div>
-          </div>
-        ))}
-      </div>
-      <div style={{position:"fixed",bottom:0,left:"50%",transform:"translateX(-50%)",width:"100%",maxWidth:430,padding:"16px 20px",background:"#fff",borderTop:"1px solid #EEE"}}>
-        <Btn full onClick={()=>onSave(sel)}>儲存今日排課（{sel.size} 位）</Btn>
-      </div>
-    </div>
-  );
-}
-
-// ── Add Student ────────────────────────────────────────────────
-function AddStudent({onSave,onBack,existingNames}){
+// ══════════════════════════════════════════════════════════════
+// 教練新增學員
+// ══════════════════════════════════════════════════════════════
+function CoachAddStudent({onSave,onBack,existingNames}){
   const [name,setName]=useState("");
   const [total,setTotal]=useState("");
   const [paidDate,setPaidDate]=useState(new Date().toISOString().split("T")[0]);
   const [note,setNote]=useState("");
   const [scheduledToday,setScheduled]=useState(false);
   const [err,setErr]=useState("");
-
   const handleSave=()=>{
-    const trimmed=name.trim();
-    if(!trimmed){setErr("請輸入姓名");return;}
-    if(existingNames.includes(trimmed)){setErr("此姓名已存在，請使用不同名稱");return;}
+    const t=name.trim();
+    if(!t){setErr("請輸入姓名");return;}
+    if(existingNames.includes(t)){setErr("此姓名已存在");return;}
     if(!total||Number(total)<1){setErr("請輸入有效堂數");return;}
-    setErr("");
-    onSave({id:String(Date.now()),name:trimmed,pin:null,scheduledToday,contracts:[{id:Date.now()+1,total:Number(total),used:0,paidDate,note}]});
+    onSave({id:String(Date.now()),name:t,pin:null,scheduledToday,contracts:[{id:Date.now()+1,total:Number(total),used:0,paidDate,note,signed:false,sigData:null}]});
   };
   return(
     <div style={{minHeight:"100vh",background:"#F7F7F7"}}>
-      <div style={{background:"#fff",padding:"28px 20px 18px",borderBottom:"1px solid #EEE"}}>
+      <div style={{background:"#fff",padding:"24px 20px 18px",borderBottom:"1px solid #EEE"}}>
         <button onClick={onBack} style={{background:"none",border:"none",color:"#AAA",fontSize:14,cursor:"pointer",padding:0,marginBottom:14}}>← 返回</button>
         <div style={{fontSize:20,fontWeight:900,color:"#1A1A1A"}}>新增學員</div>
       </div>
@@ -475,134 +933,48 @@ function AddStudent({onSave,onBack,existingNames}){
         </div>
         {err&&<div style={{background:"#FFEBEE",borderRadius:10,padding:"10px 14px",marginBottom:14,fontSize:13,color:"#D32F2F",fontWeight:600}}>⚠ {err}</div>}
         <Btn full onClick={handleSave}>新增學員</Btn>
-        <div style={{background:"#FFFDE7",borderRadius:11,padding:"10px 14px",marginTop:14,fontSize:12,color:"#F57F17",lineHeight:1.7}}>💡 PIN 碼將在首次簽到時由學員自行設定</div>
       </div>
     </div>
   );
 }
 
-// ── PIN Screen ─────────────────────────────────────────────────
-function PinScreen({student,isFirstTime,onSuccess,onBack}){
-  const [pin,setPin]=useState("");
-  const [conf,setConf]=useState("");
-  const [step,setStep]=useState(isFirstTime?"set":"verify");
-  const [error,setError]=useState("");
-  const [shake,setShake]=useState(false);
-  // 用 ref 避免 closure stale 問題
-  const pinRef=useRef("");
-
-  const doShake=msg=>{setShake(true);setError(msg);setPin("");setConf("");pinRef.current="";setTimeout(()=>setShake(false),500);};
-
-  const handleKey=k=>{
-    if(k==="⌫"){
-      if(step==="conf") setConf(c=>c.slice(0,-1));
-      else setPin(c=>c.slice(0,-1));
-      setError(""); return;
-    }
-    const cur=step==="conf"?conf:pin;
-    if(cur.length>=4) return;
-    const next=cur+k;
-    if(step==="conf") setConf(next);
-    else{setPin(next);pinRef.current=next;}
-    setError("");
-    if(next.length===4){
-      setTimeout(()=>{
-        if(step==="set"){setStep("conf");setConf("");}
-        else if(step==="conf"){
-          if(next===pinRef.current){
-            hashPin(pinRef.current).then(h=>onSuccess(h));
-          }else doShake("兩次 PIN 不一致，請重設");
-          return;
-        }else{
-          hashPin(next).then(h=>{
-            const stored=student.pin;
-            // 支援舊版明文 PIN 與新版 hash 兩種格式
-            if(isHashed(stored)?h===stored:next===stored) onSuccess(null);
-            else doShake("密碼錯誤，請重試");
-          });
-          return; // 非同步，不繼續執行
-        }
-      },120);
-    }
-  };
-
-  const display=step==="conf"?conf:pin;
-  const titles={
-    set:["設定你的 PIN 碼","請輸入 4 位數字"],
-    conf:["再輸入一次確認","請再次輸入"],
-    verify:[`哈囉，${student.name}！`,"請輸入 PIN 碼解鎖"],
-  };
-  return(
-    <div style={{minHeight:"100vh",background:"#fff",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center"}}>
-      <button onClick={onBack} style={{position:"absolute",top:28,left:20,background:"none",border:"none",color:"#AAA",fontSize:14,cursor:"pointer"}}>← 返回</button>
-      <div style={{textAlign:"center",marginBottom:44}}>
-        <div style={{width:84,height:84,borderRadius:24,background:"#F5F5F5",display:"flex",alignItems:"center",justifyContent:"center",fontSize:38,fontWeight:700,color:"#555",margin:"0 auto 24px"}}>{student.name[0]}</div>
-        {isFirstTime&&<div style={{fontSize:10,color:"#F9A825",letterSpacing:2,fontWeight:700,marginBottom:6}}>首次設定</div>}
-        <div style={{fontSize:26,fontWeight:800,color:"#1A1A1A"}}>{titles[step][0]}</div>
-        <div style={{fontSize:17,color:"#AAA",marginTop:8}}>{titles[step][1]}</div>
-      </div>
-      <div style={{display:"flex",gap:22,marginBottom:16,animation:shake?"shake 0.4s ease":"none"}}>
-        {[0,1,2,3].map(i=><PinDot key={i} filled={i<display.length}/>)}
-      </div>
-      <div style={{height:26,display:"flex",alignItems:"center",marginBottom:24}}>
-        {error&&<span style={{color:"#D32F2F",fontSize:16,fontWeight:600}}>{error}</span>}
-      </div>
-      <NumPad onPress={handleKey}/>
-    </div>
-  );
-}
-
-// ── Student Info ───────────────────────────────────────────────
-function StudentInfo({student,records,onCheckin,onBack}){
-  const [showConfirm,setShowConfirm]=useState(false);
-  const totalRem=getTotalRemaining(student);
-  const activeC=student.contracts.find(c=>c.total-c.used>0)||student.contracts[student.contracts.length-1];
-  const myRecords=records.filter(r=>String(r.studentId)===String(student.id)).slice(-5).reverse();
+// ══════════════════════════════════════════════════════════════
+// 排課 / 紀錄 / 設定（簡化）
+// ══════════════════════════════════════════════════════════════
+function EditSchedule({students,onSave,onBack}){
+  const [sel,setSel]=useState(new Set(students.filter(s=>s.scheduledToday).map(s=>s.id)));
+  const toggle=id=>setSel(prev=>{const n=new Set(prev);n.has(id)?n.delete(id):n.add(id);return n;});
   return(
     <div style={{minHeight:"100vh",background:"#F7F7F7"}}>
-      <div style={{background:"#fff",padding:"24px 20px 18px",borderBottom:"1px solid #EEE"}}>
+      <div style={{background:"#fff",padding:"28px 20px 18px",borderBottom:"1px solid #EEE"}}>
         <button onClick={onBack} style={{background:"none",border:"none",color:"#AAA",fontSize:14,cursor:"pointer",padding:0,marginBottom:14}}>← 返回</button>
-        <div style={{display:"flex",alignItems:"center",gap:14}}>
-          <div style={{width:52,height:52,borderRadius:16,background:"#F5F5F5",display:"flex",alignItems:"center",justifyContent:"center",fontSize:24,fontWeight:700,color:"#555"}}>{student.name[0]}</div>
-          <div>
-            <div style={{fontSize:20,fontWeight:900,color:"#1A1A1A"}}>{student.name}</div>
-            <div style={{fontSize:12,color:"#AAA",marginTop:2}}>繳費日：{activeC.paidDate}</div>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+          <div><div style={{fontSize:20,fontWeight:900,color:"#1A1A1A"}}>今日排課</div><div style={{fontSize:12,color:"#AAA",marginTop:4}}>已選 {sel.size} 位</div></div>
+          <div style={{display:"flex",gap:8}}>
+            <button onClick={()=>setSel(new Set())} style={{background:"#F2F2F2",border:"none",color:"#888",padding:"7px 12px",borderRadius:10,fontSize:12,fontWeight:600,cursor:"pointer"}}>全取消</button>
+            <button onClick={()=>setSel(new Set(students.map(s=>s.id)))} style={{background:"#F2F2F2",border:"none",color:"#888",padding:"7px 12px",borderRadius:10,fontSize:12,fontWeight:600,cursor:"pointer"}}>全選</button>
           </div>
         </div>
       </div>
-      <div style={{padding:"18px 20px"}}>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:14}}>
-          {[{label:"已上課堂",val:student.contracts.reduce((s,c)=>s+c.used,0),bg:"#F5F5F5",c:"#1A1A1A"},{label:"剩餘堂數",val:totalRem,bg:remBg(totalRem),c:remColor(totalRem)}].map(({label,val,bg,c})=>(
-            <div key={label} style={{background:bg,borderRadius:14,padding:"18px 10px",textAlign:"center",border:"1px solid #EEE"}}>
-              <div style={{fontSize:32,fontWeight:900,color:c}}>{val}</div>
-              <div style={{fontSize:11,color:"#AAA",marginTop:4}}>{label}</div>
+      <div style={{padding:"14px 20px 100px"}}>
+        {students.map(s=>(
+          <div key={s.id} onClick={()=>toggle(s.id)} style={{background:"#fff",border:`1.5px solid ${sel.has(s.id)?"#1A1A1A":"#EEE"}`,borderRadius:14,padding:"13px 15px",marginBottom:8,cursor:"pointer",display:"flex",alignItems:"center",gap:12}}>
+            <div style={{width:22,height:22,borderRadius:6,border:`2px solid ${sel.has(s.id)?"#1A1A1A":"#DDD"}`,background:sel.has(s.id)?"#1A1A1A":"transparent",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+              {sel.has(s.id)&&<span style={{color:"#fff",fontSize:13}}>✓</span>}
             </div>
-          ))}
-        </div>
-        {totalRem<=3&&totalRem>0&&<div style={{background:"#FFEBEE",border:"1px solid #FFCDD2",borderRadius:11,padding:"11px 14px",marginBottom:14,color:"#D32F2F",fontSize:13,fontWeight:600,textAlign:"center"}}>⚠️ 合約即將結束，請向教練洽詢續課</div>}
-        {totalRem<=0&&<div style={{background:"#F5F5F5",border:"1px solid #EEE",borderRadius:11,padding:"11px 14px",marginBottom:14,color:"#9E9E9E",fontSize:13,fontWeight:700,textAlign:"center"}}>🚫 堂數已用完，請向教練洽詢續課</div>}
-        {totalRem>0&&(<div style={{marginBottom:20}}><Btn full onClick={()=>setShowConfirm(true)}>簽到</Btn><div style={{fontSize:11,color:"#CCC",textAlign:"center",marginTop:7}}>點擊後需再次確認</div></div>)}
-        {student.contracts.length>0&&(<>
-          <div style={{fontSize:12,color:"#AAA",letterSpacing:1.5,fontWeight:600,marginBottom:8}}>合約紀錄</div>
-          {[...student.contracts].reverse().map(c=>{const rem=Math.max(0,c.total-c.used);return(<div key={c.id} style={{background:"#fff",border:"1px solid #EEE",borderRadius:11,padding:"10px 14px",marginBottom:6,display:"flex",justifyContent:"space-between",alignItems:"center"}}><div><div style={{fontSize:13,color:"#555",fontWeight:600}}>{c.paidDate}</div>{c.note&&<div style={{fontSize:11,color:"#BBB",marginTop:1}}>{c.note}</div>}</div><div style={{fontSize:14,fontWeight:800,color:remColor(rem)}}>{rem}<span style={{fontSize:11,color:"#CCC",fontWeight:400}}>/{c.total}</span></div></div>);})}
-        </>)}
-        {myRecords.length>0&&(<>
-          <div style={{fontSize:12,color:"#AAA",letterSpacing:1.5,fontWeight:600,marginTop:18,marginBottom:8}}>最近上課紀錄</div>
-          {myRecords.map(r=>(<div key={r.id} style={{background:"#fff",border:"1px solid #EEE",borderRadius:11,padding:"11px 14px",marginBottom:6,display:"flex",justifyContent:"space-between"}}><span style={{fontSize:13,color:"#555"}}>{r.timestamp}</span><span style={{fontSize:12,color:"#D32F2F",fontWeight:700}}>−1 堂</span></div>))}
-        </>)}
+            <div style={{flex:1}}>
+              <div style={{fontWeight:700,fontSize:15,color:"#1A1A1A"}}>{s.name}</div>
+              <div style={{fontSize:11,color:"#CCC"}}>剩餘 {getTotalRemaining(s)} 堂</div>
+            </div>
+          </div>
+        ))}
       </div>
-      {showConfirm&&(<Modal title="確認簽到" onClose={()=>setShowConfirm(false)}>
-        <div style={{fontSize:14,color:"#666",marginBottom:20,lineHeight:1.9}}>確定登記今日上課？<br/>簽到後剩餘 <strong style={{color:remColor(totalRem-1)}}>{Math.max(0,totalRem-1)} 堂</strong>。</div>
-        <div style={{display:"flex",gap:10}}>
-          <Btn variant="light" style={{flex:1}} onClick={()=>setShowConfirm(false)}>取消</Btn>
-          <Btn style={{flex:2}} onClick={()=>{setShowConfirm(false);onCheckin();}}>✓ 確認簽到</Btn>
-        </div>
-      </Modal>)}
+      <div style={{position:"fixed",bottom:0,left:"50%",transform:"translateX(-50%)",width:"100%",maxWidth:430,padding:"16px 20px",background:"#fff",borderTop:"1px solid #EEE"}}>
+        <Btn full onClick={()=>onSave(sel)}>儲存（{sel.size} 位）</Btn>
+      </div>
     </div>
   );
 }
-
-// ── Records Screen ─────────────────────────────────────────────
 function RecordsScreen({records,onBack}){
   return(
     <div style={{minHeight:"100vh",background:"#F7F7F7"}}>
@@ -611,35 +983,74 @@ function RecordsScreen({records,onBack}){
         <div style={{fontSize:18,fontWeight:900,color:"#1A1A1A"}}>簽到紀錄</div>
       </div>
       <div style={{padding:"14px 20px 100px"}}>
-        {[...records].reverse().map(r=>(<div key={r.id} style={{background:"#fff",border:"1px solid #EEE",borderRadius:13,padding:"13px 15px",marginBottom:7,display:"flex",justifyContent:"space-between",alignItems:"center"}}><div><div style={{fontWeight:700,fontSize:14,color:"#1A1A1A"}}>{r.studentName}</div><div style={{fontSize:12,color:"#AAA",marginTop:3}}>{r.timestamp}</div></div><div style={{background:"#FFEBEE",borderRadius:8,padding:"4px 10px",color:"#D32F2F",fontWeight:700,fontSize:13}}>−1 堂</div></div>))}
+        {[...records].reverse().map(r=>(
+          <div key={r.id} style={{background:"#fff",border:"1px solid #EEE",borderRadius:13,padding:"13px 15px",marginBottom:7}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:r.sigData?8:0}}>
+              <div><div style={{fontWeight:700,fontSize:14,color:"#1A1A1A"}}>{r.studentName}</div><div style={{fontSize:12,color:"#AAA",marginTop:2}}>{r.timestamp}</div></div>
+              <div style={{background:"#FFEBEE",borderRadius:8,padding:"4px 10px",color:"#D32F2F",fontWeight:700,fontSize:13}}>−1 堂</div>
+            </div>
+            {r.sigData&&<img src={r.sigData} style={{width:"100%",border:"1px solid #EEE",borderRadius:8,background:"#FAFAFA"}}/>}
+          </div>
+        ))}
         {records.length===0&&<div style={{textAlign:"center",color:"#CCC",padding:"50px 0"}}>尚無記錄</div>}
       </div>
     </div>
   );
 }
-
-// ── Settings Screen ────────────────────────────────────────────
 function SettingsScreen({students,records,onReload,showToast}){
   const [reloading,setReloading]=useState(false);
-  const handleExcel=()=>{exportExcel(students,records);showToast("✅ Excel 已下載");};
-  const handleReload=async()=>{
-    setReloading(true);
-    await onReload();
-    setReloading(false);
-    showToast("✅ 已從雲端重新載入");
-  };
+  // report state
+  const months=[...new Set(records.map(r=>r.timestamp?r.timestamp.slice(0,7):"").filter(Boolean))].sort().reverse();
+  const now=new Date();
+  const defaultMonth=`${now.getFullYear()}/${String(now.getMonth()+1).padStart(2,"0")}`;
+  const [selMonth,setSelMonth]=useState(months[0]||defaultMonth);
+  const [selStudent,setSelStudent]=useState("");
   return(
     <div style={{minHeight:"100vh",background:"#F7F7F7"}}>
       <div style={{background:"#fff",padding:"28px 20px 18px",borderBottom:"1px solid #EEE"}}>
-        <div style={{fontSize:11,letterSpacing:2,color:"#CCC",marginBottom:3}}>DATA</div>
         <div style={{fontSize:24,fontWeight:900,color:"#1A1A1A"}}>備份設定</div>
       </div>
       <div style={{padding:"20px 20px 100px"}}>
-        <div style={{background:"#E8F5E9",border:"1px solid #C8E6C9",borderRadius:14,padding:"14px 16px",marginBottom:16}}>
-          <div style={{fontSize:13,fontWeight:700,color:"#2E7D32",marginBottom:4}}>☁ 雲端同步已啟用</div>
-          <div style={{fontSize:12,color:"#388E3C",lineHeight:1.7}}>每次操作自動同步至 Google Sheet，不同裝置共用同一份資料。</div>
-        </div>
+
+        {/* 報表匯出 */}
+        <div style={{fontSize:12,color:"#AAA",letterSpacing:1.5,fontWeight:600,marginBottom:10}}>報表匯出</div>
         <div style={{background:"#fff",border:"1px solid #EEE",borderRadius:16,padding:"18px",marginBottom:16}}>
+          <div style={{fontSize:13,fontWeight:700,color:"#1A1A1A",marginBottom:12}}>📅 每月上課報表</div>
+          <div style={{fontSize:12,color:"#888",marginBottom:10}}>選擇月份，匯出該月所有學員出席統計。</div>
+          <select value={selMonth} onChange={e=>setSelMonth(e.target.value)}
+            style={{width:"100%",padding:"10px 12px",background:"#F5F5F5",border:"1px solid #EEE",borderRadius:10,fontSize:14,outline:"none",color:"#555",marginBottom:12}}>
+            {months.length===0&&<option value={defaultMonth}>{defaultMonth}</option>}
+            {months.map(m=><option key={m} value={m}>{m}</option>)}
+          </select>
+          <Btn full variant="green" onClick={()=>{
+            if(!selMonth){showToast("請選擇月份","warn");return;}
+            exportMonthlyReport(records,students,selMonth);
+            showToast("✅ 月報表已下載");
+          }}>⬇ 下載月報表</Btn>
+        </div>
+
+        <div style={{background:"#fff",border:"1px solid #EEE",borderRadius:16,padding:"18px",marginBottom:16}}>
+          <div style={{fontSize:13,fontWeight:700,color:"#1A1A1A",marginBottom:12}}>👤 個別學員報表</div>
+          <div style={{fontSize:12,color:"#888",marginBottom:10}}>選擇學員，匯出其所有上課日期與時間。</div>
+          <select value={selStudent} onChange={e=>setSelStudent(e.target.value)}
+            style={{width:"100%",padding:"10px 12px",background:"#F5F5F5",border:"1px solid #EEE",borderRadius:10,fontSize:14,outline:"none",color:"#555",marginBottom:12}}>
+            <option value="">請選擇學員</option>
+            {[...students].sort((a,b)=>a.name.localeCompare(b.name,"zh-TW")).map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+          <Btn full variant="green" disabled={!selStudent} onClick={()=>{
+            const s=students.find(x=>x.id===selStudent);
+            if(!s)return;
+            exportStudentReport(records,s);
+            showToast(`✅ ${s.name} 報表已下載`);
+          }}>⬇ 下載學員報表</Btn>
+        </div>
+
+        <div style={{fontSize:12,color:"#AAA",letterSpacing:1.5,fontWeight:600,marginBottom:10,marginTop:4}}>資料備份</div>
+        <div style={{background:"#E8F5E9",border:"1px solid #C8E6C9",borderRadius:14,padding:"14px 16px",marginBottom:12}}>
+          <div style={{fontSize:13,fontWeight:700,color:"#2E7D32",marginBottom:4}}>☁ 雲端同步已啟用</div>
+          <div style={{fontSize:12,color:"#388E3C",lineHeight:1.7}}>每次操作自動同步至 Google Sheet。</div>
+        </div>
+        <div style={{background:"#fff",border:"1px solid #EEE",borderRadius:16,padding:"18px",marginBottom:12}}>
           <div style={{fontSize:12,color:"#AAA",letterSpacing:1.5,fontWeight:600,marginBottom:14}}>目前資料</div>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
             {[{label:"學員",val:students.length},{label:"簽到紀錄",val:records.length}].map(({label,val})=>(
@@ -650,15 +1061,14 @@ function SettingsScreen({students,records,onReload,showToast}){
             ))}
           </div>
         </div>
-        <div style={{background:"#fff",border:"1px solid #EEE",borderRadius:16,padding:"18px",marginBottom:16}}>
-          <div style={{fontSize:12,color:"#AAA",letterSpacing:1.5,fontWeight:600,marginBottom:6}}>匯出 Excel</div>
-          <div style={{fontSize:13,color:"#888",marginBottom:14,lineHeight:1.7}}>下載唯讀的 <strong>.xls</strong> 備份，包含學員、合約、簽到紀錄。PIN 碼以 ●●●● 顯示保護隱私。</div>
-          <Btn full variant="green" onClick={handleExcel}>📊 下載 Excel 備份</Btn>
+        <div style={{background:"#fff",border:"1px solid #EEE",borderRadius:16,padding:"18px",marginBottom:12}}>
+          <div style={{fontSize:12,color:"#AAA",letterSpacing:1.5,fontWeight:600,marginBottom:6}}>完整備份</div>
+          <div style={{fontSize:13,color:"#888",marginBottom:12,lineHeight:1.7}}>下載唯讀備份，PIN 以 ●●●● 顯示。</div>
+          <Btn full variant="green" onClick={()=>{exportExcel(students,records);showToast("✅ Excel 已下載");}}>📊 下載完整 Excel 備份</Btn>
         </div>
         <div style={{background:"#fff",border:"1px solid #EEE",borderRadius:16,padding:"18px"}}>
           <div style={{fontSize:12,color:"#AAA",letterSpacing:1.5,fontWeight:600,marginBottom:6}}>雲端操作</div>
-          <div style={{fontSize:13,color:"#888",marginBottom:14,lineHeight:1.7}}>若其他裝置更新了資料，點此重新抓取最新版本。</div>
-          <Btn full variant="light" disabled={reloading} onClick={handleReload}>
+          <Btn full variant="light" disabled={reloading} onClick={async()=>{setReloading(true);await onReload();setReloading(false);showToast("✅ 已重新載入");}}>
             {reloading?"載入中…":"⬇ 從雲端重新載入"}
           </Btn>
         </div>
@@ -667,133 +1077,139 @@ function SettingsScreen({students,records,onReload,showToast}){
   );
 }
 
-// ── Success Screen ─────────────────────────────────────────────
-function SuccessScreen(){
-  const [count,setCount]=useState(5);
-  useEffect(()=>{
-    const t=setInterval(()=>setCount(c=>{if(c<=1){clearInterval(t);}return c-1;}),1000);
-    return()=>clearInterval(t);
-  },[]);
+// ══════════════════════════════════════════════════════════════
+// 簽到成功畫面
+// ══════════════════════════════════════════════════════════════
+function SuccessScreen({name,onDone}){
+  useEffect(()=>{const t=setTimeout(onDone,4000);return()=>clearTimeout(t);},[]);
   return(
-    <div style={{minHeight:"100vh",background:"#fff",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center"}}>
-      <svg width="64" height="64" viewBox="0 0 64 64" fill="none" style={{marginBottom:20}}>
+    <div style={{minHeight:"100vh",background:"#fff",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:30}}>
+      <svg width="72" height="72" viewBox="0 0 64 64" fill="none" style={{marginBottom:24}}>
         <circle cx="32" cy="32" r="28" stroke="#2E7D32" strokeWidth="2.5"/>
         <path d="M20 32l9 9 15-15" stroke="#2E7D32" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
       </svg>
-      <div style={{fontSize:22,fontWeight:900,color:"#1A1A1A"}}>簽到成功！</div>
-      <div style={{fontSize:14,color:"#AAA",marginTop:10}}>{count>0?`${count} 秒後返回…`:""}</div>
+      <div style={{fontSize:24,fontWeight:900,color:"#1A1A1A"}}>簽到成功！</div>
+      <div style={{fontSize:15,color:"#AAA",marginTop:10}}>{name}，今日上課已記錄</div>
     </div>
   );
 }
 
-// ── Main App ───────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════
+// Main App
+// ══════════════════════════════════════════════════════════════
 function App(){
   const [students,setStudents]=useState(()=>lsGet(LS_S,[]));
   const [records,setRecords]=useState(()=>lsGet(LS_R,[]));
   const [syncing,setSyncing]=useState(true);
-  const [screen,setScreen]=useState("home");
-  const [tab,setTab]=useState("home");
-  const [selected,setSelected]=useState(null);
-  const [coachViewing,setCoachViewing]=useState(null);
+  // screen: student | register | coachPin | coach | coachDetail | coachAdd | schedule | records | settings | success
+  const [screen,setScreen]=useState("student");
+  const [coachTab,setCoachTab]=useState("coach");
+  const [editing,setEditing]=useState(null);
+  const [successName,setSuccessName]=useState("");
   const [toast,setToast]=useState(null);
-  const go=setScreen;
   const showToast=(msg,type="ok")=>setToast({msg,type});
 
-  // 啟動時：先載學員（快），簽到紀錄背景慢慢載
   useEffect(()=>{
     (async()=>{
-      try{
-        const s=await gasGet("getStudents");
-        if(s&&Array.isArray(s)){setStudents(s);lsSet(LS_S,s);}
-      }catch{}
+      try{const s=await gasGet("getStudents");if(s&&Array.isArray(s)){setStudents(s);lsSet(LS_S,s);}}catch{}
       setSyncing(false);
-      // 學員載完後，背景繼續載簽到紀錄
-      try{
-        const r=await gasGet("getRecords");
-        if(r&&Array.isArray(r)){
-          const normalized=r.map(rec=>({...rec,timestamp:normalizeTimestamp(rec.timestamp)}));
-          setRecords(normalized);lsSet(LS_R,normalized);
-        }
-      }catch{}
+      try{const r=await gasGet("getRecords");if(r&&Array.isArray(r)){const n=r.map(rec=>({...rec,timestamp:normalizeTimestamp(rec.timestamp)}));setRecords(n);lsSet(LS_R,n);}}catch{}
     })();
   },[]);
 
-  // 所有寫入：先更新本機狀態，背景同步 GAS（零 lag）
   const setS=next=>{setStudents(next);lsSet(LS_S,next);};
   const setR=next=>{setRecords(next);lsSet(LS_R,next);};
+
+  const handleSignContractFromStudent=(student,contractId,sigData)=>{
+    const updated={...student,contracts:student.contracts.map(c=>c.id===contractId?{...c,signed:true,sigData,signedAt:getTaiwanTime()}:c)};
+    setS(students.map(s=>s.id===student.id?updated:s));
+    gasSync({action:"saveStudent",student:updated});
+  };
+
+  const handleCheckinDone=(student,sigData)=>{
+    const timestamp=getTaiwanTime();
+    const nextStudents=students.map(s=>{
+      if(s.id!==student.id)return s;
+      let done=false;
+      return{...s,contracts:s.contracts.map(c=>{if(!done&&c.total>0&&c.total-c.used>0){done=true;return{...c,used:c.used+1};}return c;})};
+    });
+    const newRec={id:Date.now(),studentId:student.id,studentName:student.name,timestamp,sigData,hasSig:true};
+    setS(nextStudents);setR([...records,newRec]);
+    setSuccessName(student.name);
+    setScreen("success");
+    const upd=nextStudents.find(s=>s.id===student.id);
+    gasSync({action:"saveStudent",student:upd});
+    gasSync({action:"checkin",studentId:student.id,studentName:student.name,timestamp});
+  };
+
+  const handleRegisterStudent=s=>{
+    const next=[...students,s];
+    setS(next);gasSync({action:"saveStudent",student:s});
+    showToast("✅ 已登錄，請等待教練設定合約");
+    setScreen("student");
+  };
 
   const handleUpdateStudent=updated=>{
     setS(students.map(s=>s.id===updated.id?updated:s));
     gasSync({action:"saveStudent",student:updated});
-    go("home");setCoachViewing(null);
+    showToast("✅ 已儲存");
   };
   const handleDeleteStudent=id=>{
     setS(students.filter(s=>s.id!==id));
     gasSync({action:"deleteStudent",id});
   };
-  const handlePinSuccess=newPin=>{
-    if(newPin){
-      const updated={...selected,pin:newPin};
-      setS(students.map(s=>s.id===selected.id?updated:s));
-      gasSync({action:"saveStudent",student:updated});
-    }
-    go("studentInfo");
-  };
-  const handleCheckin=()=>{
-    const timestamp=getTaiwanTime();
-    const nextStudents=students.map(s=>{
-      if(s.id!==selected.id) return s;
-      let done=false;
-      return{...s,contracts:s.contracts.map(c=>{if(!done&&c.total-c.used>0){done=true;return{...c,used:c.used+1};}return c;})};
-    });
-    const newRec={id:Date.now(),studentId:selected.id,studentName:selected.name,timestamp};
-    setS(nextStudents);
-    setR([...records,newRec]);
-    go("success");
-    const upd=nextStudents.find(s=>s.id===selected.id);
-    gasSync({action:"saveStudent",student:upd});
-    gasSync({action:"checkin",studentId:selected.id,studentName:selected.name,timestamp});
-    setTimeout(()=>{go("home");setSelected(null);showToast(`✅ ${selected.name} 簽到成功！`);},5000);
-  };
   const handleAddStudent=s=>{
-    setS([...students,s]);
-    gasSync({action:"saveStudent",student:s});
-    showToast("✅ 學員已新增");go("home");
+    const next=[...students,s];
+    setS(next);gasSync({action:"saveStudent",student:s});
+    showToast("✅ 學員已新增");setScreen("coach");
   };
   const handleSaveSchedule=selIds=>{
     const next=students.map(s=>({...s,scheduledToday:selIds.has(s.id)}));
-    setS(next);
-    // 排課變動：全量同步
-    gasSync({action:"syncAll",students:next});
-    showToast("✅ 今日排課已更新");go("home");
+    setS(next);gasSync({action:"syncAll",students:next});
+    showToast("✅ 今日排課已更新");setScreen("coach");
   };
   const handleReload=async()=>{
     const [s,r]=await Promise.all([gasGet("getStudents"),gasGet("getRecords")]);
     if(s&&Array.isArray(s)){setStudents(s);lsSet(LS_S,s);}
-    if(r&&Array.isArray(r)){
-      const normalized=r.map(rec=>({...rec,timestamp:normalizeTimestamp(rec.timestamp)}));
-      setRecords(normalized);lsSet(LS_R,normalized);
-    }
+    if(r&&Array.isArray(r)){const n=r.map(rec=>({...rec,timestamp:normalizeTimestamp(rec.timestamp)}));setRecords(n);lsSet(LS_R,n);}
   };
 
-  const tabChange=t=>{setTab(t);go(t);};
-  const currentStudent=selected?students.find(s=>s.id===selected.id):null;
-  const coachStudent=coachViewing?students.find(s=>s.id===coachViewing.id):null;
-  const showTabs=["home","records","settings"].includes(screen);
+  const handleCoachTab=t=>{
+    setCoachTab(t);
+    if(t==="coach")setScreen("coach");
+    else if(t==="records")setScreen("records");
+    else if(t==="settings")setScreen("settings");
+  };
+
+  const coachScreens=["coach","coachDetail","coachAdd","schedule","records","settings"];
+  const showCoachTabs=coachScreens.includes(screen);
+  const editingStudent=editing?students.find(s=>s.id===editing.id):null;
 
   return(
     <div style={{position:"relative"}}>
       {toast&&<Toast msg={toast.msg} type={toast.type} onDone={()=>setToast(null)}/>}
-      {screen==="home"&&<CoachHome students={students} onSignIn={s=>{setSelected(s);go("studentPin");}} onEdit={s=>{setCoachViewing(s);go("coachDetail");}} onAdd={()=>go("addStudent")} onEditSchedule={()=>go("schedule")} syncing={syncing}/>}
-      {screen==="coachDetail"&&coachStudent&&<CoachDetail student={coachStudent} records={records} onBack={()=>{go("home");setCoachViewing(null);}} onUpdate={handleUpdateStudent} onDelete={handleDeleteStudent} showToast={showToast}/>}
-      {screen==="schedule"&&<EditSchedule students={students} onSave={handleSaveSchedule} onBack={()=>go("home")}/>}
-      {screen==="addStudent"&&<AddStudent onSave={handleAddStudent} onBack={()=>go("home")} existingNames={students.map(s=>s.name)}/>}
-      {screen==="studentPin"&&selected&&<PinScreen student={selected} isFirstTime={selected.pin===null} onSuccess={handlePinSuccess} onBack={()=>{go("home");setSelected(null);}}/>}
-      {screen==="studentInfo"&&currentStudent&&<StudentInfo student={currentStudent} records={records} onCheckin={handleCheckin} onBack={()=>{go("home");setSelected(null);}}/>}
-      {screen==="success"&&<SuccessScreen/>}
-      {screen==="records"&&<RecordsScreen records={records} onBack={()=>{go("home");setTab("home");}}/>}
-      {screen==="settings"&&<SettingsScreen students={students} records={records} onReload={handleReload} showToast={showToast}/>}
-      {showTabs&&<BottomTabs active={tab} onChange={tabChange}/>}
+
+      {screen==="student"&&<StudentHome students={students} records={records} onCheckinDone={handleCheckinDone} onGoCoach={()=>{setCoachTab("coach");setScreen("coach");}} onRegister={()=>setScreen("register")} syncing={syncing} onSignContract={handleSignContractFromStudent}/>}
+      {screen==="register"&&<StudentRegister onDone={handleRegisterStudent} onBack={()=>setScreen("student")} existingNames={students.map(s=>s.name)} existingStudents={students}/>}
+      {screen==="success"&&<SuccessScreen name={successName} onDone={()=>setScreen("student")}/>}
+
+      {screen==="coach"&&<CoachHome students={students} onEdit={s=>{setEditing(s);setScreen("coachDetail");}} onAdd={()=>setScreen("coachAdd")} onEditSchedule={()=>setScreen("schedule")} onBack={id=>{if(id==="student"){setScreen("student");}else{handleCoachTab(id);}}} syncing={syncing}/>}
+      {screen==="coachDetail"&&editingStudent&&<CoachDetail student={editingStudent} records={records} onBack={()=>{setScreen("coach");setEditing(null);}} onUpdate={handleUpdateStudent} onDelete={handleDeleteStudent} showToast={showToast}/>}
+      {screen==="coachAdd"&&<CoachAddStudent onSave={handleAddStudent} onBack={()=>setScreen("coach")} existingNames={students.map(s=>s.name)}/>}
+      {screen==="schedule"&&<EditSchedule students={students} onSave={handleSaveSchedule} onBack={()=>setScreen("coach")}/>}
+      {screen==="records"&&<RecordsScreen records={records} students={students} onBack={()=>setScreen("coach")}/>}
+      {screen==="settings"&&<SettingsScreen students={students} records={records} onReload={handleReload} showToast={showToast} coachTabChange={handleCoachTab}/>}
+
+      {showCoachTabs&&(
+        <div style={{position:"fixed",bottom:0,left:"50%",transform:"translateX(-50%)",width:"100%",maxWidth:430,background:"#fff",borderTop:"1px solid #F0F0F0",display:"flex"}}>
+          {[{id:"coach",label:"學員管理",Icon:PeopleIcon},{id:"records",label:"簽到紀錄",Icon:ListIcon},{id:"settings",label:"備份設定",Icon:GearIcon}].map(({id,label,Icon})=>(
+            <button key={id} onClick={()=>handleCoachTab(id)} style={{flex:1,padding:"11px 0 9px",background:"none",border:"none",cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:3}}>
+              <Icon active={coachTab===id}/>
+              <div style={{fontSize:10,fontWeight:coachTab===id?700:400,color:coachTab===id?"#1A1A1A":"#CCC"}}>{label}</div>
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
