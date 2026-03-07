@@ -199,24 +199,137 @@ function NumPad({onPress}){
     </div>
   );
 }
-function SignatureCanvas({onSigned,height=200}){
+// 全螢幕橫向簽名面板
+function SignatureCanvas({onSigned,label="請在此簽名"}){
   const canvasRef=useRef(null);
   const drawing=useRef(false);
   const hasStroke=useRef(false);
-  const getPos=(canvas,e)=>{const rect=canvas.getBoundingClientRect();const src=e.touches?e.touches[0]:e;return{x:(src.clientX-rect.left)*(canvas.width/rect.width),y:(src.clientY-rect.top)*(canvas.height/rect.height)};};
-  const start=e=>{e.preventDefault();const canvas=canvasRef.current;const ctx=canvas.getContext("2d");const pos=getPos(canvas,e);ctx.beginPath();ctx.moveTo(pos.x,pos.y);drawing.current=true;};
-  const move=e=>{e.preventDefault();if(!drawing.current)return;const canvas=canvasRef.current;const ctx=canvas.getContext("2d");ctx.lineWidth=2.5;ctx.lineCap="round";ctx.strokeStyle="#1A1A1A";const pos=getPos(canvas,e);ctx.lineTo(pos.x,pos.y);ctx.stroke();hasStroke.current=true;};
-  const end=e=>{e.preventDefault();drawing.current=false;if(hasStroke.current&&onSigned)onSigned(canvasRef.current.toDataURL("image/png"));};
-  const clear=()=>{const canvas=canvasRef.current;canvas.getContext("2d").clearRect(0,0,canvas.width,canvas.height);hasStroke.current=false;if(onSigned)onSigned(null);};
-  useEffect(()=>{const canvas=canvasRef.current;const rect=canvas.getBoundingClientRect();canvas.width=rect.width*window.devicePixelRatio||rect.width;canvas.height=height*window.devicePixelRatio||height;const ctx=canvas.getContext("2d");ctx.scale(window.devicePixelRatio||1,window.devicePixelRatio||1);},[]);
+  const [signed,setSigned]=useState(false);
+  const [open,setOpen]=useState(false);
+
+  const initCanvas=()=>{
+    const canvas=canvasRef.current;
+    if(!canvas)return;
+    const dpr=window.devicePixelRatio||1;
+    // 全螢幕尺寸
+    const W=window.innerWidth;
+    const H=window.innerHeight;
+    canvas.width=W*dpr;
+    canvas.height=H*dpr;
+    canvas.style.width=W+"px";
+    canvas.style.height=H+"px";
+    const ctx=canvas.getContext("2d");
+    ctx.setTransform(1,0,0,1,0,0);
+    ctx.scale(dpr,dpr);
+    ctx.clearRect(0,0,W,H);
+    hasStroke.current=false;
+  };
+
+  useEffect(()=>{
+    if(open){
+      // 鎖定捲動
+      document.body.style.overflow="hidden";
+      setTimeout(initCanvas,30);
+    }else{
+      document.body.style.overflow="";
+    }
+    return()=>{document.body.style.overflow="";};
+  },[open]);
+
+  const getPos=(canvas,e)=>{
+    const rect=canvas.getBoundingClientRect();
+    const src=e.touches?e.touches[0]:e;
+    return{x:src.clientX-rect.left,y:src.clientY-rect.top};
+  };
+
+  const onStart=e=>{
+    e.preventDefault();e.stopPropagation();
+    const canvas=canvasRef.current;
+    const ctx=canvas.getContext("2d");
+    const pos=getPos(canvas,e);
+    ctx.beginPath();ctx.moveTo(pos.x,pos.y);
+    drawing.current=true;
+  };
+  const onMove=e=>{
+    e.preventDefault();e.stopPropagation();
+    if(!drawing.current)return;
+    const canvas=canvasRef.current;
+    const ctx=canvas.getContext("2d");
+    ctx.lineWidth=2.5;ctx.lineCap="round";ctx.lineJoin="round";ctx.strokeStyle="#1A1A1A";
+    const pos=getPos(canvas,e);
+    ctx.lineTo(pos.x,pos.y);ctx.stroke();
+    hasStroke.current=true;
+  };
+  const onEnd=e=>{e.preventDefault();e.stopPropagation();drawing.current=false;};
+
+  const handleClear=()=>{
+    const canvas=canvasRef.current;
+    if(!canvas)return;
+    const dpr=window.devicePixelRatio||1;
+    const ctx=canvas.getContext("2d");
+    ctx.clearRect(0,0,canvas.width/dpr,canvas.height/dpr);
+    hasStroke.current=false;
+  };
+
+  const handleConfirm=()=>{
+    if(!hasStroke.current)return;
+    const dataUrl=canvasRef.current.toDataURL("image/png");
+    setSigned(true);
+    setOpen(false);
+    onSigned(dataUrl);
+  };
+
+  const handleReopen=()=>{
+    setSigned(false);
+    onSigned(null);
+    setOpen(true);
+  };
+
   return(
-    <div>
-      <div style={{border:"1.5px solid #DDD",borderRadius:14,overflow:"hidden",background:"#FAFAFA",position:"relative"}}>
-        <canvas ref={canvasRef} style={{display:"block",width:"100%",height:height,cursor:"crosshair"}} onMouseDown={start} onMouseMove={move} onMouseUp={end} onMouseLeave={end} onTouchStart={start} onTouchMove={move} onTouchEnd={end}/>
-        <div style={{position:"absolute",top:"50%",left:"50%",transform:"translate(-50%,-50%)",fontSize:13,color:"#DDD",pointerEvents:"none",userSelect:"none"}}>請在此簽名</div>
-      </div>
-      <button onClick={clear} style={{marginTop:8,background:"none",border:"none",color:"#AAA",fontSize:13,cursor:"pointer",padding:"4px 0"}}>✕ 清除重簽</button>
-    </div>
+    <>
+      {/* 觸發按鈕區 */}
+      {!signed?(
+        <button onClick={()=>setOpen(true)}
+          style={{width:"100%",padding:"18px",background:"#F7F7F7",border:"2px dashed #DDD",borderRadius:14,cursor:"pointer",color:"#AAA",fontSize:14,fontWeight:600,display:"flex",flexDirection:"column",alignItems:"center",gap:8}}>
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#CCC" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>
+          </svg>
+          點此開啟簽名
+        </button>
+      ):(
+        <div style={{background:"#E8F5E9",borderRadius:14,padding:"12px 16px",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+          <div style={{display:"flex",alignItems:"center",gap:8}}>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#2E7D32" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+            <span style={{fontSize:14,color:"#2E7D32",fontWeight:700}}>簽名完成</span>
+          </div>
+          <button onClick={handleReopen} style={{background:"none",border:"none",color:"#AAA",fontSize:12,cursor:"pointer",padding:"4px 8px"}}>重簽</button>
+        </div>
+      )}
+
+      {/* 全螢幕簽名 overlay */}
+      {open&&(
+        <div style={{position:"fixed",inset:0,zIndex:9999,background:"#fff",display:"flex",flexDirection:"column"}}>
+          {/* 頂部工具列 */}
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"14px 20px",borderBottom:"1px solid #EEE",flexShrink:0,background:"#fff"}}>
+            <button onClick={()=>setOpen(false)} style={{background:"none",border:"none",color:"#888",fontSize:15,cursor:"pointer",padding:"4px 8px"}}>取消</button>
+            <div style={{fontSize:15,fontWeight:700,color:"#1A1A1A"}}>{label}</div>
+            <div style={{display:"flex",gap:10}}>
+              <button onClick={handleClear} style={{background:"#F5F5F5",border:"none",color:"#666",fontSize:13,fontWeight:600,cursor:"pointer",padding:"7px 14px",borderRadius:9}}>清除</button>
+              <button onClick={handleConfirm} style={{background:"#1A1A1A",border:"none",color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer",padding:"7px 18px",borderRadius:9}}>確認</button>
+            </div>
+          </div>
+          {/* 簽名區域 */}
+          <div style={{flex:1,position:"relative",overflow:"hidden",background:"#FAFAFA"}}>
+            <div style={{position:"absolute",top:"50%",left:"50%",transform:"translate(-50%,-50%)",fontSize:15,color:"#E0E0E0",pointerEvents:"none",userSelect:"none",letterSpacing:2}}>請在此簽名</div>
+            <canvas ref={canvasRef}
+              style={{position:"absolute",top:0,left:0,touchAction:"none",cursor:"crosshair"}}
+              onMouseDown={onStart} onMouseMove={onMove} onMouseUp={onEnd} onMouseLeave={onEnd}
+              onTouchStart={onStart} onTouchMove={onMove} onTouchEnd={onEnd}
+            />
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 function BottomTabs({active,onChange}){
@@ -362,7 +475,7 @@ function StudentHome({students,records,onCheckinDone,onGoCoach,onRegister,syncin
                     <span style={{fontSize:13,color:"#2E7D32",fontWeight:700}}>✓ 已簽名</span>
                     <Btn variant="green" style={{fontSize:12,padding:"6px 14px"}} onClick={()=>onSignContract(fresh,c.id,contractSigMap[c.id])}>確認送出</Btn>
                   </div>
-                  :<><SignatureCanvas onSigned={sd=>setContractSigMap(m=>({...m,[c.id]:sd}))} height={120}/>
+                  :<><SignatureCanvas onSigned={sd=>setContractSigMap(m=>({...m,[c.id]:sd}))} label="合約簽名"/>
                     <Btn full variant="green" style={{marginTop:8,fontSize:13,padding:"10px"}} disabled={!contractSigMap[c.id]} onClick={()=>onSignContract(fresh,c.id,contractSigMap[c.id])}>確認簽署此合約</Btn>
                   </>
                 }
@@ -382,7 +495,7 @@ function StudentHome({students,records,onCheckinDone,onGoCoach,onRegister,syncin
             {activeMode==="checkin"&&totalRem>0&&(
               <div style={{background:"#fff",borderRadius:14,padding:"16px",border:"1px solid #EEE"}}>
                 <div style={{fontSize:13,color:"#888",marginBottom:12}}>請在下方簽名確認今日上課</div>
-                <SignatureCanvas onSigned={setSigData} height={160}/>
+                <SignatureCanvas onSigned={setSigData} label="上課簽到"/>
                 {error&&<div style={{color:"#D32F2F",fontSize:13,marginTop:8,fontWeight:600}}>{error}</div>}
                 <Btn full style={{marginTop:14}} disabled={!sigData} onClick={()=>{if(!sigData){setError("請先簽名");return;}setShowConfirm(true);}}>確認簽到</Btn>
               </div>
@@ -545,7 +658,7 @@ function StudentRegister({onDone,onBack,onCheckinNow,existingNames,existingStude
             <div style={{fontSize:13,color:"#888",marginTop:4}}>繳費日：{paidDate}{note?"　"+note:""}</div>
           </div>
           <div style={{fontSize:14,color:"#555",marginBottom:14}}>請在下方簽名確認合約內容。</div>
-          <SignatureCanvas onSigned={setSig} height={150}/>
+          <SignatureCanvas onSigned={setSig} label="合約簽名"/>
           {sigErr&&<div style={{color:"#D32F2F",fontSize:13,marginTop:8,fontWeight:600}}>{sigErr}</div>}
           <Btn full style={{marginTop:16}} disabled={!sig} onClick={handleFinish}>✓ 完成合約簽署</Btn>
         </div>
@@ -800,7 +913,7 @@ function CoachDetail({student,records,onBack,onUpdate,onDelete,showToast}){
 
       {showContractSig&&(<Modal title="合約簽名" onClose={()=>{setShowContractSig(null);setContractSigData(null);}}>
         <div style={{fontSize:13,color:"#666",marginBottom:14,lineHeight:1.8}}>請學員在下方簽名確認合約。</div>
-        <SignatureCanvas onSigned={setContractSigData} height={140}/>
+        <SignatureCanvas onSigned={setContractSigData} label="合約簽名"/>
         <div style={{display:"flex",gap:10,marginTop:14}}>
           <Btn variant="light" style={{flex:1}} onClick={()=>{setShowContractSig(null);setContractSigData(null);}}>取消</Btn>
           <Btn style={{flex:2}} disabled={!contractSigData} onClick={()=>handleSignContract(showContractSig)}>確認簽名</Btn>
