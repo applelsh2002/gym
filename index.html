@@ -29,8 +29,28 @@
 const {useState,useRef,useEffect}=React;
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-const GAS_URL="https://script.google.com/macros/s/AKfycbzflxPvVcuJQTA4eLPtDquFiuOTGu17W7l95544pVYDnFEV96HXJVi_2JuP0R97atngmQ/exec";
-const COACH_PIN="0000"; // 教練管理密碼
+const GAS_URL="https://script.google.com/macros/s/AKfycbz0FM5J2PUxWHtExmXNLLVa07gLjxI3IF7ocjrHXs-25LzSLAxbuZneDRFT5S3pOVC9Vw/exec";
+const LS_COACH_PIN="coach_master_pin"; // localStorage 快取 key
+function getCoachPinCache(){return localStorage.getItem(LS_COACH_PIN)||null;}
+function setCoachPinCache(hashed){localStorage.setItem(LS_COACH_PIN,hashed);}
+
+// 從 GAS 取得教練密碼 hash（快取優先，GAS 為主）
+async function fetchCoachPin(){
+  try{
+    const res=await gasGet("getCoachPin");
+    if(res&&res.hash){
+      setCoachPinCache(res.hash); // 更新快取
+      return res.hash;
+    }
+  }catch{}
+  return getCoachPinCache(); // 網路失敗時用快取
+}
+
+// 儲存教練密碼 hash 到 GAS + 快取
+async function saveCoachPin(hash){
+  setCoachPinCache(hash);
+  gasSync({action:"setCoachPin",hash});
+}
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 const LS_S="coach_students",LS_R="coach_records";
@@ -999,24 +1019,49 @@ function StudentRegister({onDone,onBack,onCheckinNow,existingNames,existingStude
 }
 
 // ══════════════════════════════════════════════════════════════
-// 教練 PIN 入口
+// 教練 PIN 入口（驗證）
 // ══════════════════════════════════════════════════════════════
 function CoachPinGate({onSuccess,onBack}){
   const [pin,setPin]=useState("");
   const [error,setError]=useState("");
   const [shake,setShake]=useState(false);
+  const [loading,setLoading]=useState(false);
   const doShake=msg=>{setShake(true);setError(msg);setPin("");setTimeout(()=>setShake(false),500);};
-  const handleKey=k=>{
+
+  const handleKey=async k=>{
+    if(loading)return;
     if(k==="⌫"){setPin(c=>c.slice(0,-1));setError("");return;}
     if(pin.length>=4)return;
     const next=pin+k;setPin(next);setError("");
-    if(next.length===4)setTimeout(()=>{next===COACH_PIN?onSuccess():doShake("密碼錯誤");},120);
+    if(next.length<4)return;
+    setLoading(true);
+    await new Promise(r=>setTimeout(r,120));
+    try{
+      const stored=await fetchCoachPin();
+      const h=await hashPin(next);
+      if(!stored){
+        // GAS 尚未設定密碼：預設 0000
+        const def=await hashPin("0000");
+        if(h===def){onSuccess();}
+        else{doShake("密碼錯誤（預設 0000）");}
+      } else {
+        if(h===stored){onSuccess();}
+        else{doShake("密碼錯誤");}
+      }
+    }catch{
+      doShake("網路異常，請重試");
+    }
+    setLoading(false);
   };
+
   return(
     <div style={{minHeight:"100vh",background:"#fff",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center"}}>
-      <button onClick={onBack} style={{position:"absolute",top:28,left:20,background:"none",border:"none",color:"#AAA",fontSize:14,cursor:"pointer"}}>← 返回</button>
+      <button onClick={onBack} style={{position:"absolute",top:28,left:20,background:"none",border:"none",color:"#CCC",fontSize:14,cursor:"pointer"}}>← 返回</button>
       <div style={{textAlign:"center",marginBottom:44}}>
-        <div style={{width:68,height:68,borderRadius:20,background:"#1A1A1A",display:"flex",alignItems:"center",justifyContent:"center",fontSize:28,margin:"0 auto 20px"}}>🏠</div>
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#1A1A1A" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{display:"block",margin:"0 auto 20px"}}>
+          <rect x="3" y="11" width="18" height="11" rx="2"/>
+          <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+        </svg>
         <div style={{fontSize:24,fontWeight:800,color:"#1A1A1A"}}>教練管理</div>
         <div style={{fontSize:15,color:"#AAA",marginTop:8}}>請輸入管理密碼</div>
       </div>
@@ -1482,11 +1527,67 @@ function SettingsScreen({students,records,onReload,showToast,onTab}){
   const defaultMonth=`${now.getFullYear()}/${String(now.getMonth()+1).padStart(2,"0")}`;
   const [selMonth,setSelMonth]=useState(months[0]||defaultMonth);
   const [selStudent,setSelStudent]=useState("");
+
+  // 修改管理密碼
+  const [changingPin,setChangingPin]=useState(false); // 顯示修改密碼 modal
+  const [cpStep,setCpStep]=useState("current"); // "current" | "new" | "confirm"
+  const [cpPin,setCpPin]=useState("");
+  const [cpFirst,setCpFirst]=useState("");
+  const [cpError,setCpError]=useState("");
+  const [cpShake,setCpShake]=useState(false);
+  const cpDoShake=msg=>{setCpShake(true);setCpError(msg);setCpPin("");setTimeout(()=>setCpShake(false),500);};
+  const cpReset=()=>{setCpStep("current");setCpPin("");setCpFirst("");setCpError("");};
+
+  const [cpSaving,setCpSaving]=useState(false);
+  const handleCpKey=async k=>{
+    if(k==="⌫"){setCpPin(c=>c.slice(0,-1));setCpError("");return;}
+    if(cpPin.length>=4)return;
+    const next=cpPin+k;setCpPin(next);setCpError("");
+    if(next.length<4)return;
+    await new Promise(r=>setTimeout(r,120));
+    if(cpStep==="current"){
+      const h=await hashPin(next);
+      const stored=await fetchCoachPin();
+      if(h===stored){setCpStep("new");setCpPin("");setCpError("");}
+      else{cpDoShake("密碼錯誤");}
+    } else if(cpStep==="new"){
+      setCpFirst(next);setCpPin("");setCpError("");setCpStep("confirm");
+    } else if(cpStep==="confirm"){
+      if(next===cpFirst){
+        setCpSaving(true);
+        const h=await hashPin(next);
+        await saveCoachPin(h);
+        setCpSaving(false);
+        setChangingPin(false);cpReset();showToast("✅ 管理密碼已更新");
+      } else {setCpFirst("");setCpStep("new");cpDoShake("兩次輸入不一致，請重新輸入新密碼");}
+    }
+  };
+
+  const cpTitle=cpStep==="current"?"輸入現有密碼":cpStep==="new"?"輸入新密碼":"確認新密碼";
+  const cpSub=cpStep==="current"?"請輸入目前的管理密碼":cpStep==="new"?"請設定新的 4 位數密碼":"請再輸入一次新密碼";
+
   return(
     <div style={{minHeight:"100vh",background:"#F7F7F7"}}>
       <div style={{background:"#fff",padding:"28px 20px 18px",borderBottom:"1px solid #EEE"}}>
         <div style={{fontSize:24,fontWeight:900,color:"#1A1A1A"}}>備份設定</div>
       </div>
+
+      {/* 修改密碼 Modal */}
+      {changingPin&&(
+        <Modal title="修改管理密碼" onClose={()=>{setChangingPin(false);cpReset();}}>
+          <div style={{textAlign:"center",paddingBottom:8}}>
+            <div style={{fontSize:15,fontWeight:700,color:"#1A1A1A",marginBottom:4}}>{cpTitle}</div>
+            <div style={{fontSize:13,color:"#AAA",marginBottom:20}}>{cpSub}</div>
+            <div style={{display:"flex",gap:18,justifyContent:"center",marginBottom:10,animation:cpShake?"shake 0.4s ease":"none"}}>
+              {[0,1,2,3].map(i=><PinDot key={i} filled={i<cpPin.length}/>)}
+            </div>
+            <div style={{height:24,marginBottom:8}}>
+              {cpSaving?<span style={{color:"#888",fontSize:14}}>儲存中…</span>:cpError&&<span style={{color:"#D32F2F",fontSize:14,fontWeight:600}}>{cpError}</span>}
+            </div>
+            <NumPad onPress={handleCpKey}/>
+          </div>
+        </Modal>
+      )}
       <div style={{padding:"20px 20px 100px"}}>
         <div style={{fontSize:12,color:"#AAA",letterSpacing:1.5,fontWeight:600,marginBottom:10}}>報表匯出</div>
         <div style={{background:"#fff",border:"1px solid #EEE",borderRadius:16,padding:"18px",marginBottom:16}}>
@@ -1551,6 +1652,26 @@ function SettingsScreen({students,records,onReload,showToast,onTab}){
           <Btn full variant="light" disabled={reloading} onClick={async()=>{setReloading(true);await onReload();setReloading(false);showToast("✅ 已重新載入");}}>
             {reloading?"載入中…":"⬇ 從雲端重新載入"}
           </Btn>
+        </div>
+
+        {/* 管理密碼 */}
+        <div style={{fontSize:12,color:"#AAA",letterSpacing:1.5,fontWeight:600,margin:"20px 0 10px"}}>安全性</div>
+        <div style={{background:"#fff",border:"1px solid #EEE",borderRadius:16,padding:"18px"}}>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+            <div style={{display:"flex",alignItems:"center",gap:10}}>
+              <div style={{width:36,height:36,borderRadius:10,background:"#F5F5F5",display:"flex",alignItems:"center",justifyContent:"center"}}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#888" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+              </div>
+              <div>
+                <div style={{fontSize:13,fontWeight:700,color:"#1A1A1A"}}>管理密碼</div>
+                <div style={{fontSize:11,color:"#AAA",marginTop:2}}>教練管理介面的登入密碼</div>
+              </div>
+            </div>
+            <button onClick={()=>{setChangingPin(true);cpReset();}}
+              style={{padding:"7px 14px",background:"#F5F5F5",border:"none",borderRadius:9,fontSize:12,fontWeight:700,color:"#555",cursor:"pointer"}}>
+              修改
+            </button>
+          </div>
         </div>
       </div>
       <BottomTabs active="settings" onChange={onTab}/>
@@ -1678,12 +1799,31 @@ function App(){
     if(r&&Array.isArray(r)){const n=r.map(rec=>({...rec,timestamp:normalizeTimestamp(rec.timestamp)}));setRecords(n);lsSet(LS_R,n);}
   };
 
+  const [coachUnlocked,setCoachUnlocked]=useState(false); // 本次 session 是否已驗證
+
+  // 啟動時從 GAS 拉最新密碼（若 GAS 無密碼則自動寫入預設 0000）
+  useEffect(()=>{ fetchCoachPin(); },[]);
+
   const handleTab=t=>{
     setCoachTab(t);
-    if(t==="student"){setScreen("student");}
-    else if(t==="coach"){setScreen("coach");}
-    else if(t==="records"){setScreen("records");}
-    else if(t==="settings"){setScreen("settings");}
+    if(t==="student"){setScreen("student");setCoachUnlocked(false);}
+    else if(t==="coach"){setScreen("coachGate");}
+    else if(t==="records"){setScreen("coachGate");}
+    else if(t==="settings"){setScreen("coachGate");}
+  };
+
+  // 驗證成功後跳到原本要去的 tab
+  const handleCoachUnlock=()=>{
+    setCoachUnlocked(true);
+    const dest=coachTab==="student"?"coach":coachTab;
+    setScreen(dest);
+  };
+
+  // 教練內部 tab 切換（已驗證後不需再過密碼）
+  const handleCoachTab=t=>{
+    setCoachTab(t);
+    if(t==="student"){setScreen("student");setCoachUnlocked(false);}
+    else{setScreen(t);}
   };
 
   const editingStudent=editing?students.find(s=>s.id===editing.id):null;
@@ -1692,15 +1832,16 @@ function App(){
     <div style={{position:"relative"}}>
       {toast&&<Toast msg={toast.msg} type={toast.type} onDone={()=>setToast(null)}/>}
 
-      {screen==="student"&&<StudentHome students={students} records={records} onCheckinDone={handleCheckinDone} onGoCoach={()=>handleTab("coach")} onRegister={()=>setScreen("register")} syncing={syncing} onSignContract={handleSignContractFromStudent} pendingCheckinStudent={pendingCheckinStudent} onClearPending={()=>setPendingCheckinStudent(null)}/>}
+      {screen==="student"&&<StudentHome students={students} records={records} onCheckinDone={handleCheckinDone} onGoCoach={()=>{setCoachTab("coach");handleTab("coach");}} onRegister={()=>setScreen("register")} syncing={syncing} onSignContract={handleSignContractFromStudent} pendingCheckinStudent={pendingCheckinStudent} onClearPending={()=>setPendingCheckinStudent(null)}/>}
       {screen==="register"&&<StudentRegister onDone={handleRegisterStudent} onBack={()=>setScreen("student")} onCheckinNow={handleCheckinAfterRegister} existingNames={students.map(s=>s.name)} existingStudents={students}/>}
       {screen==="success"&&<SuccessScreen name={successInfo.name} remaining={successInfo.remaining} onDone={()=>setScreen("student")}/>}
 
-      {screen==="coach"&&<CoachHome students={students} onEdit={s=>{setEditing(s);setScreen("coachDetail");}} onAdd={()=>setScreen("coachAdd")} onTab={handleTab} syncing={syncing}/>}
+      {screen==="coachGate"&&<CoachPinGate onSuccess={handleCoachUnlock} onBack={()=>setScreen("student")}/>}
+      {screen==="coach"&&<CoachHome students={students} onEdit={s=>{setEditing(s);setScreen("coachDetail");}} onAdd={()=>setScreen("coachAdd")} onTab={handleCoachTab} syncing={syncing}/>}
       {screen==="coachDetail"&&editingStudent&&<CoachDetail student={editingStudent} records={records} onBack={()=>{setScreen("coach");setEditing(null);}} onUpdate={handleUpdateStudent} onDelete={handleDeleteStudent} showToast={showToast}/>}
       {screen==="coachAdd"&&<CoachAddStudent onSave={handleAddStudent} onBack={()=>setScreen("coach")} existingNames={students.map(s=>s.name)}/>}
-      {screen==="records"&&<RecordsScreen records={records} students={students} onTab={handleTab}/>}
-      {screen==="settings"&&<SettingsScreen students={students} records={records} onReload={handleReload} showToast={showToast} onTab={handleTab}/>}
+      {screen==="records"&&<RecordsScreen records={records} students={students} onTab={handleCoachTab}/>}
+      {screen==="settings"&&<SettingsScreen students={students} records={records} onReload={handleReload} showToast={showToast} onTab={handleCoachTab}/>}
     </div>
   );
 }
