@@ -49,6 +49,7 @@ function gasSync(body){
   const stripped=stripSigData(body);
   const encoded=encodeURIComponent(JSON.stringify(stripped));
   fetch(GAS_URL+"?action=post&payload="+encoded,{method:"GET",mode:"no-cors",redirect:"follow"}).catch(()=>{});
+  // 只要 student 有已簽合約（帶 sigData），就永遠用 POST 確保簽名不遺失
   if(hasSigData(body)){
     fetch(GAS_URL,{method:"POST",mode:"no-cors",redirect:"follow",headers:{"Content-Type":"text/plain"},body:JSON.stringify(body)}).catch(()=>{});
   }
@@ -61,7 +62,8 @@ function stripSigData(obj){
 }
 function hasSigData(obj){
   if(!obj||!obj.student||!obj.student.contracts)return false;
-  return obj.student.contracts.some(c=>c&&c.sigData);
+  // 只要有任何一份已簽名的合約帶有 sigData，就需要走 POST
+  return obj.student.contracts.some(c=>c&&c.signed&&c.sigData);
 }
 
 function getTaiwanTime(){
@@ -106,60 +108,83 @@ const getTotalRemaining=s=>s.contracts.reduce((sum,c)=>c.total===-1?sum:sum+Math
 const remColor=r=>r<=0?"#9E9E9E":r<=3?"#D32F2F":"#2E7D32";
 const remBg=r=>r<=0?"#F5F5F5":r<=3?"#FFEBEE":"#E8F5E9";
 
-// ── 合約 PDF 列印 ─────────────────────────────────────────────
-function printContractPDF(student,contract,records){
+// ── 合約列印 Overlay（全螢幕覆蓋，不開新視窗）─────────────────
+function ContractPrintOverlay({student,contract,records,onClose}){
   const allRecs=[...records].filter(r=>String(r.studentId)===String(student.id));
   const usedRecs=allRecs.slice(0,contract.used).map(r=>r.timestamp).filter(Boolean);
   const rem=Math.max(0,contract.total-contract.used);
-  const paid=contract.paid!==false;
-  const w=window.open("","_blank","width=800,height=1050");
-  w.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"/><title>合約紀錄 - ${student.name}</title>
-<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;600;700;900&display=swap" rel="stylesheet"/>
-<style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:"Noto Sans TC",sans-serif;color:#1A1A1A;padding:40px;max-width:680px;margin:0 auto}
-h1{font-size:22px;font-weight:900;margin-bottom:2px}.sub{color:#999;font-size:11px;letter-spacing:2px;margin-bottom:30px}
-.sec{margin-bottom:22px}.sec-lbl{font-size:10px;color:#AAA;letter-spacing:2px;font-weight:700;margin-bottom:8px}
-.card{border:1px solid #E8E8E8;border-radius:10px;padding:16px 18px}
-.row{display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid #F5F5F5}.row:last-child{border-bottom:none}
-.k{color:#AAA;font-size:12px}.v{font-weight:700;font-size:13px}
-.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
-.stat{background:#F7F7F7;border-radius:8px;padding:14px;text-align:center}
-.sn{font-size:24px;font-weight:900}.sl{font-size:10px;color:#AAA;margin-top:2px}
-.badge{display:inline-block;padding:3px 10px;border-radius:6px;font-size:11px;font-weight:700}
-.py{background:#E8F5E9;color:#2E7D32}.pn{background:#FFEBEE;color:#C62828}
-.rec-wrap{display:flex;flex-wrap:wrap;gap:6px}
-.rec{background:#F5F5F5;border-radius:6px;padding:4px 10px;font-size:11px;color:#555}
-.sig-box{border:1px solid #EEE;border-radius:8px;background:#FAFAFA;overflow:hidden;margin-top:8px}
-.sig-box img{max-width:100%;display:block}
-.footer{margin-top:36px;padding-top:14px;border-top:1px solid #EEE;font-size:11px;color:#CCC;display:flex;justify-content:space-between}
-.print-btn{padding:8px 20px;background:#1A1A1A;color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:13px;font-weight:700}
-@media print{.print-btn{display:none}body{padding:20px}}</style></head><body>
-<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:28px">
-  <div><h1>合約紀錄</h1><div class="sub">CONTRACT RECORD</div></div>
-  <button class="print-btn" onclick="window.print()">列印 / 儲存 PDF</button>
-</div>
-<div class="sec"><div class="sec-lbl">學員資訊</div><div class="card">
-  <div class="row"><span class="k">姓名</span><span class="v">${student.name}</span></div>
-  <div class="row"><span class="k">合約編號</span><span class="v">#${String(contract.id).slice(-8)}</span></div>
-  <div class="row"><span class="k">繳費日期</span><span class="v">${contract.paidDate||"—"}</span></div>
-  <div class="row"><span class="k">繳費狀態</span><span class="v"><span class="badge ${paid?"py":"pn"}">${paid?"已繳費":"未繳費"}</span></span></div>
-  ${contract.note?`<div class="row"><span class="k">備注</span><span class="v">${contract.note}</span></div>`:""}
-</div></div>
-<div class="sec"><div class="sec-lbl">堂數狀況</div><div class="grid3">
-  <div class="stat"><div class="sn">${contract.total}</div><div class="sl">合約總堂</div></div>
-  <div class="stat"><div class="sn">${contract.used}</div><div class="sl">已上堂數</div></div>
-  <div class="stat"><div class="sn" style="color:${rem<=3&&rem>0?"#D32F2F":rem===0?"#9E9E9E":"#2E7D32"}">${rem}</div><div class="sl">剩餘堂數</div></div>
-</div></div>
-${usedRecs.length>0?`<div class="sec"><div class="sec-lbl">出勤紀錄（共 ${usedRecs.length} 堂）</div><div class="card"><div class="rec-wrap">${usedRecs.map(t=>`<div class="rec">${t}</div>`).join("")}</div></div></div>`:""}
-<div class="sec"><div class="sec-lbl">學員簽名</div><div class="card">
-  ${contract.signed&&contract.sigData
-    ?`<div style="font-size:12px;color:#2E7D32;margin-bottom:6px">✓ 已簽署　${contract.signedAt||""}</div><div class="sig-box"><img src="${contract.sigData}"/></div>`
-    :`<div style="color:#F9A825;font-weight:700">尚未簽署</div>`}
-</div></div>
-<div class="footer"><span>列印時間：${getTaiwanTime()}</span><span>教練管理系統</span></div>
-</body></html>`);
-  w.document.close();
+  const isPaid=contract.paid!==false;
+  const printTime=getTaiwanTime();
+  const infoRows=[
+    ["姓名",student.name,null],
+    ["合約編號","#"+String(contract.id).slice(-8),null],
+    ["繳費狀態",isPaid?"已繳費":"未繳費",isPaid?"#1565C0":"#D32F2F"],
+    ...(isPaid&&contract.paidDate?[["繳費日期",contract.paidDate,null]]:[]),
+    ...(contract.note?[["備注",contract.note,null]]:[]),
+  ];
+  return(
+    <div style={{position:"fixed",inset:0,zIndex:9998,background:"#fff",overflowY:"auto",fontFamily:"'Noto Sans TC',sans-serif"}}>
+      <style>{`@media print{.no-print{display:none!important}}`}</style>
+      <div className="no-print" style={{position:"sticky",top:0,background:"#1A1A1A",padding:"12px 20px",display:"flex",alignItems:"center",justifyContent:"space-between",zIndex:1}}>
+        <button onClick={onClose} style={{background:"none",border:"none",color:"#fff",fontSize:14,cursor:"pointer",display:"flex",alignItems:"center",gap:6}}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+          返回
+        </button>
+        <span style={{color:"#fff",fontWeight:700,fontSize:14}}>合約預覽</span>
+        <button onClick={()=>window.print()} style={{background:"#fff",border:"none",color:"#1A1A1A",fontSize:13,fontWeight:700,cursor:"pointer",padding:"7px 16px",borderRadius:8,display:"flex",alignItems:"center",gap:6}}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
+          列印
+        </button>
+      </div>
+      <div style={{maxWidth:600,margin:"0 auto",padding:"32px 24px 60px"}}>
+        <div style={{marginBottom:24}}><div style={{fontSize:20,fontWeight:900,color:"#1A1A1A",marginBottom:2}}>合約紀錄</div><div style={{fontSize:11,color:"#AAA",letterSpacing:2}}>CONTRACT RECORD</div></div>
+        <div style={{marginBottom:20}}>
+          <div style={{fontSize:10,color:"#AAA",letterSpacing:2,fontWeight:700,marginBottom:8}}>學員資訊</div>
+          <div style={{border:"1px solid #E8E8E8",borderRadius:10,overflow:"hidden"}}>
+            {infoRows.map(([k,v,c],i)=>(
+              <div key={k} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"9px 14px",background:i%2===0?"#FAFAFA":"#fff",borderBottom:i<infoRows.length-1?"1px solid #F0F0F0":"none"}}>
+                <span style={{fontSize:12,color:"#AAA"}}>{k}</span>
+                <span style={{fontSize:13,fontWeight:700,color:c||"#1A1A1A"}}>{v}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div style={{marginBottom:20}}>
+          <div style={{fontSize:10,color:"#AAA",letterSpacing:2,fontWeight:700,marginBottom:8}}>堂數狀況</div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10}}>
+            {[["合約總堂",contract.total,"#1A1A1A"],["已上堂數",contract.used,"#555"],["剩餘堂數",rem,rem===0?"#9E9E9E":rem<=3?"#D32F2F":"#2E7D32"]].map(([l,n,c])=>(
+              <div key={l} style={{background:"#F7F7F7",borderRadius:8,padding:"14px",textAlign:"center"}}>
+                <div style={{fontSize:24,fontWeight:900,color:c}}>{n}</div>
+                <div style={{fontSize:10,color:"#AAA",marginTop:2}}>{l}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+        {usedRecs.length>0&&(
+          <div style={{marginBottom:20}}>
+            <div style={{fontSize:10,color:"#AAA",letterSpacing:2,fontWeight:700,marginBottom:8}}>出勤紀錄（共 {usedRecs.length} 堂）</div>
+            <div style={{border:"1px solid #E8E8E8",borderRadius:10,padding:"14px"}}>
+              <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+                {usedRecs.map((t,i)=><div key={i} style={{background:"#F5F5F5",borderRadius:6,padding:"4px 10px",fontSize:11,color:"#555"}}>{t}</div>)}
+              </div>
+            </div>
+          </div>
+        )}
+        <div style={{marginBottom:20}}>
+          <div style={{fontSize:10,color:"#AAA",letterSpacing:2,fontWeight:700,marginBottom:8}}>學員簽名</div>
+          <div style={{border:"1px solid #E8E8E8",borderRadius:10,padding:"14px"}}>
+            {contract.signed&&contract.sigData
+              ?<><div style={{fontSize:11,color:"#2E7D32",marginBottom:8}}>✓ 已簽署　{contract.signedAt||""}</div><img src={contract.sigData} style={{maxWidth:"100%",border:"1px solid #EEE",borderRadius:8,background:"#FAFAFA",display:"block"}}/></>
+              :<div style={{fontSize:13,color:"#F9A825",fontWeight:700}}>尚未簽署</div>}
+          </div>
+        </div>
+        <div style={{borderTop:"1px solid #EEE",paddingTop:12,display:"flex",justifyContent:"space-between",fontSize:11,color:"#CCC"}}>
+          <span>列印時間：{printTime}</span><span>教練管理系統</span>
+        </div>
+      </div>
+    </div>
+  );
 }
-
 
 function exportExcel(students,records){
   const maskPin=p=>p?"●●●●":"(未設定)";
@@ -889,6 +914,7 @@ function CoachDetail({student,records,onBack,onUpdate,onDelete,showToast}){
   const [editName,setEditName]=useState(student.name);
   const [editingName,setEditingName]=useState(false);
   const [contractSigData,setContractSigData]=useState(null);
+  const [printContract,setPrintContract]=useState(null);
   const [form,setForm]=useState({total:"",paidDate:new Date().toISOString().split("T")[0],note:"",paid:true});
   const idRef=useRef(Date.now());
   const totalRem=getTotalRemaining(student);
@@ -979,7 +1005,7 @@ function CoachDetail({student,records,onBack,onUpdate,onDelete,showToast}){
               {/* 操作按鈕列 */}
               {!isPending&&(
                 <div style={{display:"flex",gap:8,marginTop:10}}>
-                  <button onClick={()=>printContractPDF(student,c,records)}
+                  <button onClick={()=>setPrintContract(c)}
                     style={{flex:1,padding:"7px",background:"#F5F5F5",border:"none",borderRadius:9,fontSize:12,fontWeight:600,color:"#555",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:5}}>
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
                     列印合約
@@ -995,10 +1021,7 @@ function CoachDetail({student,records,onBack,onUpdate,onDelete,showToast}){
               )}
               {c.signed&&c.sigData&&(
                 <div style={{marginTop:10}}>
-                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
-                    <div style={{fontSize:11,color:"#AAA"}}>學員簽名</div>
-                    <button onClick={()=>downloadSig(c.sigData,`合約簽名_${student.name}_${c.paidDate||c.id}.png`)} style={{background:"none",border:"none",color:"#2E7D32",fontSize:12,fontWeight:700,cursor:"pointer"}}>⬇ 下載</button>
-                  </div>
+                  <div style={{fontSize:11,color:"#AAA",marginBottom:4}}>學員簽名</div>
                   <img src={c.sigData} style={{width:"100%",border:"1px solid #EEE",borderRadius:8,background:"#FAFAFA"}}/>
                 </div>
               )}
@@ -1067,6 +1090,8 @@ function CoachDetail({student,records,onBack,onUpdate,onDelete,showToast}){
           <Btn variant="red" style={{flex:1}} onClick={()=>{onDelete(student.id);showToast("已刪除學員","warn");onBack();}}>確認刪除</Btn>
         </div>
       </Modal>)}
+
+      {printContract&&<ContractPrintOverlay student={student} contract={printContract} records={records} onClose={()=>setPrintContract(null)}/>}
     </div>
   );
 }
