@@ -210,24 +210,33 @@ async function generateContractPDF(student, contract, printTime){
   y += 10;
 
   // ── 簽名欄 ──
-  const halfW = (cw-8)/2;
-  // 教練簽名
-  const cl = textImg('教練簽名',{fontSize:9, color:'#AAAAAA', fontWeight:'700', width:halfW});
+  // 教練簽名標籤 + 空白線
+  const cl = textImg('教練簽名',{fontSize:9, color:'#AAAAAA', fontWeight:'700', width:cw});
   addImg(cl.dataUrl, ml, y, cl.wMM, cl.hMM);
+  y += cl.hMM + 1;
   doc.setDrawColor(187,187,187); doc.setLineWidth(0.5);
-  doc.line(ml, y+cl.hMM+18, ml+halfW, y+cl.hMM+18);
-  // 學員確認
-  const sl = textImg('學員確認',{fontSize:9, color:'#AAAAAA', fontWeight:'700', width:halfW});
-  addImg(sl.dataUrl, ml+halfW+8, y, sl.wMM, sl.hMM);
+  doc.line(ml, y+18, ml+cw, y+18);
+  y += 26;
+
+  // 學員確認標籤
+  const sl = textImg('學員確認',{fontSize:9, color:'#AAAAAA', fontWeight:'700', width:cw});
+  addImg(sl.dataUrl, ml, y, sl.wMM, sl.hMM);
+  y += sl.hMM + 3;
+
   if(sigData){
-    // 把簽名圖嵌入 PDF
-    const sigH = 20; const sigW = halfW;
-    doc.addImage(sigData,'PNG', ml+halfW+8, y+cl.hMM+1, sigW, sigH);
+    // 計算原始 canvas 比例，讓寬度填滿可用寬，高度等比例
+    const tmpImg = new Image();
+    await new Promise(res=>{tmpImg.onload=res; tmpImg.src=sigData;});
+    const ratio = tmpImg.naturalHeight / tmpImg.naturalWidth;
+    const sigW = cw; // 填滿整行
+    const sigH = sigW * ratio;
+    doc.addImage(sigData,'PNG', ml, y, sigW, sigH);
+    y += sigH + 6;
   } else {
-    const ns = textImg('尚未簽署',{fontSize:10, color:'#F9A825', fontWeight:'700', width:halfW});
-    addImg(ns.dataUrl, ml+halfW+8, y+cl.hMM+6, ns.wMM, ns.hMM);
+    const ns = textImg('尚未簽署',{fontSize:10, color:'#F9A825', fontWeight:'700', width:cw});
+    addImg(ns.dataUrl, ml, y, ns.wMM, ns.hMM);
+    y += ns.hMM + 6;
   }
-  y += cl.hMM + 24;
 
   // ── 頁尾 ──
   y += 6;
