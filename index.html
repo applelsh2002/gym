@@ -128,41 +128,22 @@ const remBg=r=>r<=0?"#F5F5F5":r<=3?"#FFEBEE":"#E8F5E9";
 
 // ── 合約列印 Overlay ─────────────────────────────────────────
 function ContractPrintOverlay({student,contract,records,onClose}){
-  const allRecs=[...records].filter(r=>String(r.studentId)===String(student.id));
-  const usedRecs=allRecs.slice(0,contract.used).map(r=>r.timestamp).filter(Boolean);
-  const rem=Math.max(0,contract.total-contract.used);
   const isPaid=contract.paid!==false;
   const printTime=getTaiwanTime();
-  const infoRows=[
-    ["姓名",student.name,null],
-    ["合約編號","#"+String(contract.id).slice(-8),null],
-    ["繳費狀態",isPaid?"已繳費":"未繳費",isPaid?"#1565C0":"#D32F2F"],
-    ...(isPaid&&contract.paidDate?[["繳費日期",contract.paidDate,null]]:[]),
-    ...(contract.note?[["備注",contract.note,null]]:[]),
-  ];
+  const sigData=contract.sigData||sigLoad(contract.id);
   return(
     <div style={{position:"fixed",inset:0,zIndex:9998,background:"#fff",overflowY:"auto",fontFamily:"'Noto Sans TC',sans-serif"}}>
       <style>{`
         @media print {
-          @page { size: A4 portrait; margin: 15mm 14mm 15mm 14mm; }
+          @page { size: A4 portrait; margin: 20mm 18mm 20mm 18mm; }
           html, body { width: 210mm; margin: 0 !important; padding: 0 !important; background: #fff !important; }
           .no-print { display: none !important; }
           .print-root {
-            max-width: 100% !important;
-            width: 100% !important;
-            padding: 0 !important;
-            margin: 0 !important;
-            font-size: 11px !important;
-            box-sizing: border-box;
+            max-width: 100% !important; width: 100% !important;
+            padding: 0 !important; margin: 0 !important;
+            font-size: 11px !important; box-sizing: border-box;
           }
-          .print-title { font-size: 16px !important; margin-bottom: 10px !important; }
-          .print-section { margin-bottom: 10px !important; page-break-inside: avoid; }
-          .print-grid { display: grid !important; grid-template-columns: 1fr 1fr !important; gap: 10px !important; page-break-inside: avoid; }
-          .stat-num { font-size: 18px !important; }
-          .sig-img { max-height: 70px !important; max-width: 100% !important; display: block; }
-          .rec-item { font-size: 9px !important; padding: 2px 6px !important; }
-          .print-sig-box { page-break-inside: avoid; }
-          .print-confirm-grid { display: grid !important; grid-template-columns: 1fr 1fr !important; gap: 12px !important; page-break-inside: avoid; }
+          .sig-img { max-height: 60px !important; max-width: 100% !important; display: block; }
         }
       `}</style>
 
@@ -177,80 +158,53 @@ function ContractPrintOverlay({student,contract,records,onClose}){
         </button>
       </div>
 
-      {/* 合約內容（列印版緊湊，螢幕版寬鬆） */}
-      <div className="print-root" style={{maxWidth:600,margin:"0 auto",padding:"24px 20px 60px"}}>
+      {/* 合約內容 — 半A4版面 */}
+      <div className="print-root" style={{maxWidth:520,margin:"0 auto",padding:"28px 24px 60px"}}>
+
         {/* 標題 */}
-        <div className="print-title" style={{display:"flex",justifyContent:"space-between",alignItems:"flex-end",marginBottom:16,borderBottom:"2px solid #1A1A1A",paddingBottom:8}}>
+        <div style={{borderBottom:"2px solid #1A1A1A",paddingBottom:8,marginBottom:16,display:"flex",justifyContent:"space-between",alignItems:"flex-end"}}>
           <div>
-            <div style={{fontSize:18,fontWeight:900,color:"#1A1A1A"}}>合約紀錄</div>
-            <div style={{fontSize:10,color:"#AAA",letterSpacing:2}}>CONTRACT RECORD</div>
+            <div style={{fontSize:17,fontWeight:900,color:"#1A1A1A"}}>合約紀錄</div>
+            <div style={{fontSize:9,color:"#AAA",letterSpacing:2,marginTop:2}}>CONTRACT RECORD</div>
           </div>
-          <div style={{textAlign:"right",fontSize:11,color:"#AAA"}}>{printTime}</div>
+          <div style={{fontSize:10,color:"#AAA"}}>{printTime}</div>
         </div>
 
-        {/* 學員 + 堂數 並排 */}
-        <div className="print-section print-grid" style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
-          {/* 學員資訊 */}
-          <div>
-            <div style={{fontSize:9,color:"#AAA",letterSpacing:2,fontWeight:700,marginBottom:6}}>學員資訊</div>
-            <div style={{border:"1px solid #E8E8E8",borderRadius:8,overflow:"hidden"}}>
-              {infoRows.map(([k,v,c],i)=>(
-                <div key={k} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"6px 10px",background:i%2===0?"#FAFAFA":"#fff",borderBottom:i<infoRows.length-1?"1px solid #F0F0F0":"none"}}>
-                  <span style={{fontSize:10,color:"#AAA"}}>{k}</span>
-                  <span style={{fontSize:11,fontWeight:700,color:c||"#1A1A1A"}}>{v}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-          {/* 堂數統計 */}
-          <div>
-            <div style={{fontSize:9,color:"#AAA",letterSpacing:2,fontWeight:700,marginBottom:6}}>堂數狀況</div>
-            <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:6}}>
-              {[["總堂",contract.total,"#1A1A1A"],["已上",contract.used,"#555"],["剩餘",rem,rem===0?"#9E9E9E":rem<=3?"#D32F2F":"#2E7D32"]].map(([l,n,c])=>(
-                <div key={l} style={{background:"#F7F7F7",borderRadius:6,padding:"10px 4px",textAlign:"center"}}>
-                  <div className="stat-num" style={{fontSize:20,fontWeight:900,color:c}}>{n}</div>
-                  <div style={{fontSize:9,color:"#AAA",marginTop:1}}>{l}</div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-
-        {/* 出勤紀錄 */}
-        {usedRecs.length>0&&(
-          <div className="print-section" style={{marginBottom:12}}>
-            <div style={{fontSize:9,color:"#AAA",letterSpacing:2,fontWeight:700,marginBottom:6}}>出勤紀錄（共 {usedRecs.length} 堂）</div>
-            <div style={{border:"1px solid #E8E8E8",borderRadius:8,padding:"10px"}}>
-              <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
-                {usedRecs.map((t,i)=><span className="rec-item" key={i} style={{background:"#F5F5F5",borderRadius:4,padding:"3px 8px",fontSize:10,color:"#555"}}>{t}</span>)}
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* 學員簽名 */}
-        <div className="print-section" style={{marginBottom:12}}>
-          <div style={{fontSize:9,color:"#AAA",letterSpacing:2,fontWeight:700,marginBottom:6}}>學員簽名</div>
-          <div style={{border:"1px solid #E8E8E8",borderRadius:8,padding:"10px"}}>
-            {contract.signed&&contract.sigData
-              ?<><div style={{fontSize:10,color:"#2E7D32",marginBottom:4}}>✓ 已簽署　{contract.signedAt||""}</div>
-                <img className="sig-img" src={contract.sigData} style={{maxWidth:"100%",maxHeight:90,border:"1px solid #EEE",borderRadius:6,background:"#FAFAFA",display:"block"}}/></>
-              :<div style={{fontSize:12,color:"#F9A825",fontWeight:700}}>尚未簽署</div>}
-          </div>
-        </div>
-
-        {/* 教練確認欄 */}
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:8}}>
-          {["教練簽名","學員確認"].map(label=>(
-            <div key={label}>
-              <div style={{fontSize:9,color:"#AAA",marginBottom:4}}>{label}</div>
-              <div style={{borderBottom:"1px solid #BBB",height:36}}/>
+        {/* 學員資訊 + 繳費狀態 + 繳費日期 + 簽名時間 */}
+        <div style={{border:"1px solid #E8E8E8",borderRadius:8,overflow:"hidden",marginBottom:14}}>
+          {[
+            ["姓名", student.name, null],
+            ["繳費狀態", isPaid?"已繳費":"未繳費", isPaid?"#1565C0":"#D32F2F"],
+            ...(isPaid&&contract.paidDate?[["繳費日期", contract.paidDate, null]]:[]),
+            ...(contract.signedAt?[["簽名時間", contract.signedAt, "#2E7D32"]]:[]),
+            ...(contract.note?[["備注", contract.note, null]]:[]),
+          ].map(([k,v,c],i,arr)=>(
+            <div key={k} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"7px 12px",background:i%2===0?"#FAFAFA":"#fff",borderBottom:i<arr.length-1?"1px solid #F0F0F0":"none"}}>
+              <span style={{fontSize:10,color:"#AAA"}}>{k}</span>
+              <span style={{fontSize:11,fontWeight:700,color:c||"#1A1A1A"}}>{v}</span>
             </div>
           ))}
         </div>
 
+        {/* 簽名欄：教練 / 學員並排 */}
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:8}}>
+          {/* 教練簽名（空白線） */}
+          <div>
+            <div style={{fontSize:9,color:"#AAA",marginBottom:6,fontWeight:700}}>教練簽名</div>
+            <div style={{borderBottom:"1px solid #BBB",height:48}}/>
+          </div>
+          {/* 學員確認：有簽名直接顯示筆跡，沒有則顯示「尚未簽署」 */}
+          <div>
+            <div style={{fontSize:9,color:"#AAA",marginBottom:6,fontWeight:700}}>學員確認</div>
+            {sigData
+              ?<img className="sig-img" src={sigData} style={{maxWidth:"100%",maxHeight:60,display:"block",border:"none",background:"transparent"}}/>
+              :<div style={{height:48,display:"flex",alignItems:"center",fontSize:11,color:"#F9A825",fontWeight:700}}>尚未簽署</div>
+            }
+          </div>
+        </div>
+
         {/* 頁尾 */}
-        <div style={{borderTop:"1px solid #EEE",paddingTop:8,display:"flex",justifyContent:"space-between",fontSize:10,color:"#CCC"}}>
+        <div style={{borderTop:"1px solid #EEE",paddingTop:6,display:"flex",justifyContent:"space-between",fontSize:9,color:"#CCC",marginTop:4}}>
           <span>教練管理系統</span><span>{printTime}</span>
         </div>
       </div>
@@ -355,19 +309,21 @@ function NumPad({onPress}){
     </div>
   );
 }
-// 全螢幕橫向簽名面板
+// 全螢幕簽名面板
+// 流程：開啟 → 簽名 → 有筆跡才能按「確認」→ 框內彈出二次確認 → 確認後關閉並回傳
 function SignatureCanvas({onSigned,label="請在此簽名"}){
   const canvasRef=useRef(null);
   const drawing=useRef(false);
   const hasStroke=useRef(false);
   const [signed,setSigned]=useState(false);
   const [open,setOpen]=useState(false);
+  const [hasDrawn,setHasDrawn]=useState(false); // 控制確認按鈕是否可按
+  const [showConfirm,setShowConfirm]=useState(false); // 框內二次確認
 
   const initCanvas=()=>{
     const canvas=canvasRef.current;
     if(!canvas)return;
     const dpr=window.devicePixelRatio||1;
-    // 全螢幕尺寸
     const W=window.innerWidth;
     const H=window.innerHeight;
     canvas.width=W*dpr;
@@ -379,11 +335,12 @@ function SignatureCanvas({onSigned,label="請在此簽名"}){
     ctx.scale(dpr,dpr);
     ctx.clearRect(0,0,W,H);
     hasStroke.current=false;
+    setHasDrawn(false);
+    setShowConfirm(false);
   };
 
   useEffect(()=>{
     if(open){
-      // 鎖定捲動
       document.body.style.overflow="hidden";
       setTimeout(initCanvas,30);
     }else{
@@ -400,6 +357,7 @@ function SignatureCanvas({onSigned,label="請在此簽名"}){
 
   const onStart=e=>{
     e.preventDefault();e.stopPropagation();
+    if(showConfirm)return; // 二次確認顯示中不允許繼續畫
     const canvas=canvasRef.current;
     const ctx=canvas.getContext("2d");
     const pos=getPos(canvas,e);
@@ -408,13 +366,13 @@ function SignatureCanvas({onSigned,label="請在此簽名"}){
   };
   const onMove=e=>{
     e.preventDefault();e.stopPropagation();
-    if(!drawing.current)return;
+    if(!drawing.current||showConfirm)return;
     const canvas=canvasRef.current;
     const ctx=canvas.getContext("2d");
     ctx.lineWidth=2.5;ctx.lineCap="round";ctx.lineJoin="round";ctx.strokeStyle="#1A1A1A";
     const pos=getPos(canvas,e);
     ctx.lineTo(pos.x,pos.y);ctx.stroke();
-    hasStroke.current=true;
+    if(!hasStroke.current){hasStroke.current=true;setHasDrawn(true);}
   };
   const onEnd=e=>{e.preventDefault();e.stopPropagation();drawing.current=false;};
 
@@ -425,13 +383,22 @@ function SignatureCanvas({onSigned,label="請在此簽名"}){
     const ctx=canvas.getContext("2d");
     ctx.clearRect(0,0,canvas.width/dpr,canvas.height/dpr);
     hasStroke.current=false;
+    setHasDrawn(false);
+    setShowConfirm(false);
   };
 
-  const handleConfirm=()=>{
+  // 按「確認」→ 在框內彈出二次確認
+  const handleConfirmClick=()=>{
     if(!hasStroke.current)return;
+    setShowConfirm(true);
+  };
+
+  // 二次確認「確定」→ 儲存並關閉
+  const handleFinalConfirm=()=>{
     const dataUrl=canvasRef.current.toDataURL("image/png");
     setSigned(true);
     setOpen(false);
+    setShowConfirm(false);
     onSigned(dataUrl);
   };
 
@@ -465,16 +432,21 @@ function SignatureCanvas({onSigned,label="請在此簽名"}){
       {/* 全螢幕簽名 overlay */}
       {open&&(
         <div style={{position:"fixed",inset:0,zIndex:9999,background:"#fff",display:"flex",flexDirection:"column"}}>
-          {/* 頂部工具列 */}
+          {/* 頂部工具列：取消 / 標題 / 清除 + 確認 */}
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"14px 20px",borderBottom:"1px solid #EEE",flexShrink:0,background:"#fff"}}>
-            <button onClick={()=>setOpen(false)} style={{background:"none",border:"none",color:"#888",fontSize:15,cursor:"pointer",padding:"4px 8px"}}>取消</button>
+            <button onClick={()=>{setOpen(false);setShowConfirm(false);}}
+              style={{background:"none",border:"none",color:"#888",fontSize:15,cursor:"pointer",padding:"4px 8px"}}>取消</button>
             <div style={{fontSize:15,fontWeight:700,color:"#1A1A1A"}}>{label}</div>
-            <div style={{display:"flex",gap:10}}>
-              <button onClick={handleClear} style={{background:"#F5F5F5",border:"none",color:"#666",fontSize:13,fontWeight:600,cursor:"pointer",padding:"7px 14px",borderRadius:9}}>清除</button>
-              <button onClick={handleConfirm} style={{background:"#1A1A1A",border:"none",color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer",padding:"7px 18px",borderRadius:9}}>確認</button>
+            <div style={{display:"flex",gap:8}}>
+              <button onClick={handleClear}
+                style={{background:"#F5F5F5",border:"none",color:"#666",fontSize:13,fontWeight:600,cursor:"pointer",padding:"7px 14px",borderRadius:9}}>清除</button>
+              <button onClick={handleConfirmClick} disabled={!hasDrawn}
+                style={{background:hasDrawn?"#1A1A1A":"#E0E0E0",border:"none",color:hasDrawn?"#fff":"#AAA",
+                  fontSize:13,fontWeight:700,cursor:hasDrawn?"pointer":"not-allowed",padding:"7px 18px",borderRadius:9,transition:"background 0.2s"}}>確認</button>
             </div>
           </div>
-          {/* 簽名區域 */}
+
+          {/* 簽名畫布 */}
           <div style={{flex:1,position:"relative",overflow:"hidden",background:"#FAFAFA"}}>
             <div style={{position:"absolute",top:"50%",left:"50%",transform:"translate(-50%,-50%)",fontSize:15,color:"#E0E0E0",pointerEvents:"none",userSelect:"none",letterSpacing:2}}>請在此簽名</div>
             <canvas ref={canvasRef}
@@ -482,6 +454,22 @@ function SignatureCanvas({onSigned,label="請在此簽名"}){
               onMouseDown={onStart} onMouseMove={onMove} onMouseUp={onEnd} onMouseLeave={onEnd}
               onTouchStart={onStart} onTouchMove={onMove} onTouchEnd={onEnd}
             />
+
+            {/* 框內二次確認 overlay */}
+            {showConfirm&&(
+              <div style={{position:"absolute",inset:0,background:"rgba(0,0,0,0.45)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:10}}>
+                <div style={{background:"#fff",borderRadius:20,padding:"28px 24px",width:300,boxShadow:"0 12px 40px rgba(0,0,0,0.2)",textAlign:"center"}}>
+                  <div style={{fontSize:16,fontWeight:800,color:"#1A1A1A",marginBottom:8}}>確認送出簽名？</div>
+                  <div style={{fontSize:13,color:"#888",marginBottom:24,lineHeight:1.7}}>確定後將儲存此筆簽名，<br/>無法再修改。</div>
+                  <div style={{display:"flex",gap:10}}>
+                    <button onClick={()=>setShowConfirm(false)}
+                      style={{flex:1,padding:"12px",background:"#F2F2F2",border:"none",borderRadius:12,fontSize:14,fontWeight:700,color:"#555",cursor:"pointer"}}>返回修改</button>
+                    <button onClick={handleFinalConfirm}
+                      style={{flex:2,padding:"12px",background:"#1A1A1A",border:"none",borderRadius:12,fontSize:14,fontWeight:700,color:"#fff",cursor:"pointer"}}>✓ 確定送出</button>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -510,7 +498,6 @@ function StudentHome({students,records,onCheckinDone,onGoCoach,onRegister,syncin
   const [shake,setShake]=useState(false);
   const [matched,setMatched]=useState(null);
   const [sigData,setSigData]=useState(null);
-  const [showConfirm,setShowConfirm]=useState(false);
   const [checking,setChecking]=useState(false);
   const [contractSigMap,setContractSigMap]=useState({});
   const [activeMode,setActiveMode]=useState(null);
@@ -541,13 +528,6 @@ function StudentHome({students,records,onCheckinDone,onGoCoach,onRegister,syncin
     }
   };
 
-  const confirmCheckin=()=>{
-    setShowConfirm(false);
-    const fresh=students.find(s=>s.id===matched.id)||matched;
-    onCheckinDone(fresh,sigData);
-    setMatched(null);setPin("");setSigData(null);setContractSigMap({});
-  };
-
   const fresh=matched?students.find(s=>s.id===matched.id)||matched:null;
   const totalRem=fresh?getTotalRemaining(fresh):0;
   const myRecords=fresh?records.filter(r=>String(r.studentId)===String(fresh.id)).slice(-3).reverse():[];
@@ -556,7 +536,10 @@ function StudentHome({students,records,onCheckinDone,onGoCoach,onRegister,syncin
   return(
     <div style={{minHeight:"100vh",background:"#F7F7F7"}}>
       <div style={{background:"#fff",padding:"20px 20px 18px",display:"flex",alignItems:"center",justifyContent:"space-between",borderBottom:"1px solid #F0F0F0"}}>
-        <button onClick={onGoCoach} style={{width:40,height:40,borderRadius:12,background:"#F5F5F5",border:"none",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><HomeIconGray/></button>
+        <button onClick={()=>{if(matched){setMatched(null);setPin("");setSigData(null);setContractSigMap({});setActiveMode(null);setError("");}else{onGoCoach();}}}
+          style={{width:40,height:40,borderRadius:12,background:"#F5F5F5",border:"none",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#888" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+        </button>
         <div style={{textAlign:"center"}}>
           <div style={{fontSize:11,letterSpacing:2,color:"#CCC"}}>SIGN IN</div>
           <div style={{fontSize:18,fontWeight:800,color:"#1A1A1A"}}>學員簽到</div>
@@ -612,8 +595,8 @@ function StudentHome({students,records,onCheckinDone,onGoCoach,onRegister,syncin
             </div>
           )}
 
-          <div style={{display:"flex",flexDirection:"column",gap:10,marginBottom:14}}>
-            {/* 合約簽署 */}
+          <div style={{display:"flex",flexDirection:"column",gap:10}}>
+            {/* 合約簽署 — 簽完自動送出，不需按送出按鈕 */}
             {pendingContracts.length>0&&(
               activeMode==="contract"?(
                 <div style={{background:"#fff",border:"1px solid #EEE",borderRadius:14,padding:"16px"}}>
@@ -628,11 +611,15 @@ function StudentHome({students,records,onCheckinDone,onGoCoach,onRegister,syncin
                     <div key={c.id} style={{marginBottom:12}}>
                       <div style={{fontSize:12,color:"#888",marginBottom:8}}>合約：{c.paidDate||"—"}（{c.total} 堂）{c.note?" ／ "+c.note:""}</div>
                       {contractSigMap[c.id]
-                        ?<div style={{display:"flex",alignItems:"center",justifyContent:"space-between",background:"#E8F5E9",borderRadius:10,padding:"10px 14px"}}>
-                          <span style={{fontSize:13,color:"#2E7D32",fontWeight:700}}>✓ 簽名完成</span>
-                          <Btn variant="green" style={{fontSize:12,padding:"6px 14px"}} onClick={()=>onSignContract(fresh,c.id,contractSigMap[c.id])}>送出</Btn>
+                        ?<div style={{background:"#E8F5E9",borderRadius:10,padding:"10px 14px",textAlign:"center"}}>
+                          <span style={{fontSize:13,color:"#2E7D32",fontWeight:700}}>✓ 合約簽署完成</span>
                         </div>
-                        :<SignatureCanvas onSigned={sd=>setContractSigMap(m=>({...m,[c.id]:sd}))} label="合約簽名"/>
+                        :<SignatureCanvas onSigned={sd=>{
+                          if(sd){
+                            setContractSigMap(m=>({...m,[c.id]:sd}));
+                            onSignContract(fresh,c.id,sd); // 自動送出
+                          }
+                        }} label="合約簽名"/>
                       }
                     </div>
                   ))}
@@ -651,7 +638,7 @@ function StudentHome({students,records,onCheckinDone,onGoCoach,onRegister,syncin
               )
             )}
 
-            {/* 上課簽到 */}
+            {/* 上課簽到 — 簽完自動確認，不需按確認按鈕 */}
             {totalRem>0&&(
               activeMode==="checkin"?(
                 <div style={{background:"#fff",borderRadius:14,padding:"16px",border:"1px solid #EEE"}}>
@@ -663,9 +650,15 @@ function StudentHome({students,records,onCheckinDone,onGoCoach,onRegister,syncin
                     <button onClick={()=>setActiveMode(null)} style={{background:"none",border:"none",color:"#CCC",fontSize:18,cursor:"pointer",lineHeight:1}}>×</button>
                   </div>
                   <div style={{fontSize:13,color:"#888",marginBottom:12}}>請在下方簽名確認今日上課</div>
-                  <SignatureCanvas onSigned={setSigData} label="上課簽到"/>
-                  {error&&<div style={{color:"#D32F2F",fontSize:13,marginTop:8,fontWeight:600}}>{error}</div>}
-                  <Btn full style={{marginTop:14}} disabled={!sigData} onClick={()=>{if(!sigData){setError("請先簽名");return;}setShowConfirm(true);}}>確認簽到</Btn>
+                  <SignatureCanvas onSigned={sd=>{
+                    setSigData(sd);
+                    if(sd){
+                      // 簽完自動確認簽到
+                      const freshNow=students.find(s=>s.id===matched.id)||matched;
+                      onCheckinDone(freshNow,sd);
+                      setMatched(null);setPin("");setSigData(null);setContractSigMap({});setActiveMode(null);setError("");
+                    }
+                  }} label="上課簽到"/>
                 </div>
               ):(
                 <button onClick={()=>setActiveMode("checkin")}
@@ -681,20 +674,8 @@ function StudentHome({students,records,onCheckinDone,onGoCoach,onRegister,syncin
               )
             )}
           </div>
-          <Btn full variant="light" onClick={()=>{setMatched(null);setPin("");setSigData(null);setContractSigMap({});setActiveMode(null);setError("");}}>← 返回</Btn>
         </div>
       )}
-
-      {showConfirm&&fresh&&(
-        <Modal title="確認簽到" onClose={()=>setShowConfirm(false)}>
-          <div style={{fontSize:14,color:"#666",marginBottom:20,lineHeight:1.9}}>確定登記 <strong>{fresh.name}</strong> 今日上課？<br/>簽到後剩餘 <strong style={{color:remColor(Math.max(0,totalRem-1))}}>{Math.max(0,totalRem-1)} 堂</strong>。</div>
-          <div style={{display:"flex",gap:10}}>
-            <Btn variant="light" style={{flex:1}} onClick={()=>setShowConfirm(false)}>取消</Btn>
-            <Btn style={{flex:2}} onClick={confirmCheckin}>✓ 確認</Btn>
-          </div>
-        </Modal>
-      )}
-    </div>
   );
 }
 
@@ -1008,10 +989,11 @@ function CoachDetail({student,records,onBack,onUpdate,onDelete,showToast}){
     save({...student,contracts:[...student.contracts,{id:idRef.current++,total:Number(form.total),used:0,paidDate:form.paid?form.paidDate:null,paid:form.paid,note:form.note,signed:false,sigData:null}]});
     setForm({total:"",paidDate:new Date().toISOString().split("T")[0],note:"",paid:true});setShowAddC(false);
   };
-  const handleSignContract=cid=>{
-    if(!contractSigData){showToast("請先簽名","warn");return;}
-    sigSave(cid,contractSigData); // 簽名存 localStorage
-    save({...student,contracts:student.contracts.map(c=>c.id===cid?{...c,signed:true,sigData:contractSigData,signedAt:getTaiwanTime()}:c)});
+  const handleSignContract=(cid,sd)=>{
+    const sigToUse=sd||contractSigData;
+    if(!sigToUse){showToast("請先簽名","warn");return;}
+    sigSave(cid,sigToUse);
+    save({...student,contracts:student.contracts.map(c=>c.id===cid?{...c,signed:true,sigData:sigToUse,signedAt:getTaiwanTime()}:c)});
     setShowContractSig(null);setContractSigData(null);
   };
 
@@ -1143,36 +1125,45 @@ function CoachDetail({student,records,onBack,onUpdate,onDelete,showToast}){
           </div>
         )}
 
-        {/* ── 上課紀錄（下拉選單） ─────────────────── */}
+        {/* ── 上課紀錄（可展開，含簽名） ─────────────────── */}
         {allMyRecords.length>0&&(
           <div style={{marginTop:20}}>
             <div style={{fontSize:12,color:"#AAA",letterSpacing:1.5,fontWeight:600,marginBottom:8}}>上課紀錄（共 {allMyRecords.length} 堂）</div>
-            <select
-              value={selectedRecordId||""}
-              onChange={e=>setSelectedRecordId(e.target.value?Number(e.target.value):null)}
-              style={{width:"100%",padding:"10px 12px",background:"#fff",border:"1px solid #EEE",borderRadius:11,fontSize:13,color:"#555",outline:"none",marginBottom: selectedRecordId?10:0}}>
-              <option value="">— 選擇上課紀錄查看 —</option>
-              {allMyRecords.map((r,i)=>(
-                <option key={r.id} value={r.id}>{allMyRecords.length-i}. {r.timestamp}</option>
-              ))}
-            </select>
-
-            {/* 選中紀錄詳情 */}
-            {selectedRecordId&&(()=>{
-              const r=allMyRecords.find(x=>x.id===selectedRecordId);
-              if(!r)return null;
-              return(
-                <div style={{background:"#fff",border:"1px solid #EEE",borderRadius:12,padding:"14px 15px"}}>
-                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                    <div>
-                      <div style={{fontWeight:700,fontSize:14,color:"#1A1A1A"}}>{r.studentName}</div>
-                      <div style={{fontSize:12,color:"#AAA",marginTop:4}}>{r.timestamp}</div>
-                    </div>
-                    <div style={{background:"#FFEBEE",borderRadius:8,padding:"4px 12px",color:"#D32F2F",fontWeight:700,fontSize:13}}>−1 堂</div>
+            <div style={{display:"flex",flexDirection:"column",gap:6}}>
+              {allMyRecords.map((r,i)=>{
+                const isOpen=selectedRecordId===r.id;
+                const checkinSig=(()=>{try{return localStorage.getItem("checkin_"+r.id)||null;}catch{return null;}})();
+                return(
+                  <div key={r.id} style={{background:"#fff",border:"1px solid "+(isOpen?"#1A1A1A":"#EEE"),borderRadius:12,overflow:"hidden",transition:"border-color 0.15s"}}>
+                    <button onClick={()=>setSelectedRecordId(isOpen?null:r.id)}
+                      style={{width:"100%",padding:"12px 14px",background:"none",border:"none",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"space-between",textAlign:"left"}}>
+                      <div>
+                        <div style={{fontWeight:700,fontSize:13,color:"#1A1A1A"}}>{allMyRecords.length-i}. {r.timestamp}</div>
+                        {checkinSig&&<div style={{fontSize:10,color:"#2E7D32",marginTop:2}}>✓ 含簽名</div>}
+                      </div>
+                      <div style={{display:"flex",alignItems:"center",gap:8}}>
+                        <div style={{background:"#FFEBEE",borderRadius:8,padding:"3px 10px",color:"#D32F2F",fontWeight:700,fontSize:12}}>−1堂</div>
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#CCC" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"
+                          style={{transform:isOpen?"rotate(180deg)":"rotate(0)",transition:"transform 0.2s"}}>
+                          <polyline points="6 9 12 15 18 9"/>
+                        </svg>
+                      </div>
+                    </button>
+                    {isOpen&&(
+                      <div style={{borderTop:"1px solid #F5F5F5",padding:"12px 14px",background:"#FAFAFA"}}>
+                        {checkinSig
+                          ?<>
+                            <div style={{fontSize:10,color:"#AAA",marginBottom:6}}>上課簽名</div>
+                            <img src={checkinSig} style={{maxWidth:"100%",border:"1px solid #EEE",borderRadius:8,background:"#fff",display:"block"}}/>
+                          </>
+                          :<div style={{fontSize:12,color:"#AAA",fontStyle:"italic"}}>此筆紀錄無簽名檔</div>
+                        }
+                      </div>
+                    )}
                   </div>
-                </div>
-              );
-            })()}
+                );
+              })}
+            </div>
           </div>
         )}
 
@@ -1207,10 +1198,12 @@ function CoachDetail({student,records,onBack,onUpdate,onDelete,showToast}){
 
       {showContractSig&&(<Modal title="合約簽名" onClose={()=>{setShowContractSig(null);setContractSigData(null);}}>
         <div style={{fontSize:13,color:"#666",marginBottom:14,lineHeight:1.8}}>請學員在下方簽名確認合約。</div>
-        <SignatureCanvas onSigned={setContractSigData} label="合約簽名"/>
-        <div style={{display:"flex",gap:10,marginTop:14}}>
-          <Btn variant="light" style={{flex:1}} onClick={()=>{setShowContractSig(null);setContractSigData(null);}}>取消</Btn>
-          <Btn style={{flex:2}} disabled={!contractSigData} onClick={()=>handleSignContract(showContractSig)}>確認簽名</Btn>
+        <SignatureCanvas onSigned={sd=>{
+          setContractSigData(sd);
+          if(sd){handleSignContract(showContractSig,sd);}
+        }} label="合約簽名"/>
+        <div style={{marginTop:10}}>
+          <Btn variant="light" style={{width:"100%"}} onClick={()=>{setShowContractSig(null);setContractSigData(null);}}>取消</Btn>
         </div>
       </Modal>)}
 
@@ -1466,15 +1459,19 @@ function App(){
     showToast("✅ 合約簽署完成");
   };
 
-  const handleCheckinDone=(student,_sigData)=>{
+  const handleCheckinDone=(student,checkinSigData)=>{
     const timestamp=getTaiwanTime();
     const nextStudents=students.map(s=>{
       if(s.id!==student.id)return s;
       let done=false;
       return{...s,contracts:s.contracts.map(c=>{if(!done&&c.total>0&&c.total-c.used>0){done=true;return{...c,used:c.used+1};}return c;})};
     });
-    // 簽到紀錄不儲存 sigData（簽名只用於確認動作，不需保存）
-    const newRec={id:Date.now(),studentId:student.id,studentName:student.name,timestamp};
+    const recId=Date.now();
+    // 簽到簽名存 localStorage（key: "checkin_<id>"）
+    if(checkinSigData){
+      try{localStorage.setItem("checkin_"+recId,checkinSigData);}catch{}
+    }
+    const newRec={id:recId,studentId:student.id,studentName:student.name,timestamp};
     setS(nextStudents);setR([...records,newRec]);
     const upd=nextStudents.find(s=>s.id===student.id);
     setSuccessInfo({name:student.name,remaining:upd?getTotalRemaining(upd):0});
