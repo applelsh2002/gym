@@ -1026,10 +1026,13 @@ function CoachPinGate({onSuccess,onBack}){
   const [error,setError]=useState("");
   const [shake,setShake]=useState(false);
   const [loading,setLoading]=useState(false);
+  const pinHashRef=useRef(getCoachPinCache());
   const doShake=msg=>{setShake(true);setError(msg);setPin("");setTimeout(()=>setShake(false),500);};
 
-  // 進入密碼頁時也確保快取已更新（雙重保險）
-  useEffect(()=>{ if(!getCachedCoachPin()) fetchCoachPin(); },[]);
+  // 背景更新快取
+  useEffect(()=>{
+    fetchCoachPin().then(h=>{pinHashRef.current=h;});
+  },[]);
 
   const handleKey=async k=>{
     if(k==="⌫"){setPin(c=>c.slice(0,-1));setError("");return;}
@@ -1038,17 +1041,16 @@ function CoachPinGate({onSuccess,onBack}){
     if(next.length<4)return;
     await new Promise(r=>setTimeout(r,80));
     const h=await hashPin(next);
-    // 快取優先：有快取就直接比，不等 GAS
-    const cached=getCachedCoachPin();
-    if(cached){
-      if(h===cached){onSuccess();fetchCoachPin();} // 背景更新快取
+    const stored=pinHashRef.current;
+    if(stored){
+      if(h===stored){onSuccess();}
       else{doShake("密碼錯誤");}
     } else {
-      // 快取沒有才等 GAS（第一次開啟）
       setLoading(true);
       try{
-        const stored=await fetchCoachPin();
-        if(h===(stored||await hashPin("0000"))){onSuccess();}
+        const fresh=await fetchCoachPin();
+        pinHashRef.current=fresh;
+        if(h===fresh){onSuccess();}
         else{doShake("密碼錯誤");}
       }catch{doShake("網路異常，請重試");}
       setLoading(false);
@@ -1833,7 +1835,7 @@ function App(){
     <div style={{position:"relative"}}>
       {toast&&<Toast msg={toast.msg} type={toast.type} onDone={()=>setToast(null)}/>}
 
-      {screen==="student"&&<StudentHome students={students} records={records} onCheckinDone={handleCheckinDone} onGoCoach={()=>{setCoachTab("coach");handleTab("coach");}} onRegister={()=>setScreen("register")} syncing={syncing} onSignContract={handleSignContractFromStudent} pendingCheckinStudent={pendingCheckinStudent} onClearPending={()=>setPendingCheckinStudent(null)}/>}
+      {screen==="student"&&<StudentHome students={students} records={records} onCheckinDone={handleCheckinDone} onGoCoach={()=>{setCoachTab("coach");setScreen("coachGate");}} onRegister={()=>setScreen("register")} syncing={syncing} onSignContract={handleSignContractFromStudent} pendingCheckinStudent={pendingCheckinStudent} onClearPending={()=>setPendingCheckinStudent(null)}/>}
       {screen==="register"&&<StudentRegister onDone={handleRegisterStudent} onBack={()=>setScreen("student")} onCheckinNow={handleCheckinAfterRegister} existingNames={students.map(s=>s.name)} existingStudents={students}/>}
       {screen==="success"&&<SuccessScreen name={successInfo.name} remaining={successInfo.remaining} onDone={()=>setScreen("student")}/>}
 
