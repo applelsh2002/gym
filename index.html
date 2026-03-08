@@ -1028,30 +1028,31 @@ function CoachPinGate({onSuccess,onBack}){
   const [loading,setLoading]=useState(false);
   const doShake=msg=>{setShake(true);setError(msg);setPin("");setTimeout(()=>setShake(false),500);};
 
+  // 進入密碼頁時也確保快取已更新（雙重保險）
+  useEffect(()=>{ if(!getCachedCoachPin()) fetchCoachPin(); },[]);
+
   const handleKey=async k=>{
-    if(loading)return;
     if(k==="⌫"){setPin(c=>c.slice(0,-1));setError("");return;}
     if(pin.length>=4)return;
     const next=pin+k;setPin(next);setError("");
     if(next.length<4)return;
-    setLoading(true);
-    await new Promise(r=>setTimeout(r,120));
-    try{
-      const stored=await fetchCoachPin();
-      const h=await hashPin(next);
-      if(!stored){
-        // GAS 尚未設定密碼：預設 0000
-        const def=await hashPin("0000");
-        if(h===def){onSuccess();}
-        else{doShake("密碼錯誤（預設 0000）");}
-      } else {
-        if(h===stored){onSuccess();}
+    await new Promise(r=>setTimeout(r,80));
+    const h=await hashPin(next);
+    // 快取優先：有快取就直接比，不等 GAS
+    const cached=getCachedCoachPin();
+    if(cached){
+      if(h===cached){onSuccess();fetchCoachPin();} // 背景更新快取
+      else{doShake("密碼錯誤");}
+    } else {
+      // 快取沒有才等 GAS（第一次開啟）
+      setLoading(true);
+      try{
+        const stored=await fetchCoachPin();
+        if(h===(stored||await hashPin("0000"))){onSuccess();}
         else{doShake("密碼錯誤");}
-      }
-    }catch{
-      doShake("網路異常，請重試");
+      }catch{doShake("網路異常，請重試");}
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   return(
