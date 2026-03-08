@@ -209,33 +209,32 @@ async function generateContractPDF(student, contract, printTime){
   doc.roundedRect(ml, y-rowH*rows.length, cw, rowH*rows.length, 2, 2, 'S');
   y += 10;
 
-  // ── 簽名欄 ──
-  // 教練簽名標籤 + 空白線
-  const cl = textImg('教練簽名',{fontSize:9, color:'#AAAAAA', fontWeight:'700', width:cw});
+  // ── 簽名欄（左右並排）──
+  const halfW = (cw-8)/2;
+  const cl = textImg('教練簽名',{fontSize:9, color:'#AAAAAA', fontWeight:'700', width:halfW});
   addImg(cl.dataUrl, ml, y, cl.wMM, cl.hMM);
-  y += cl.hMM + 1;
+  const sl = textImg('學員確認',{fontSize:9, color:'#AAAAAA', fontWeight:'700', width:halfW});
+  addImg(sl.dataUrl, ml+halfW+8, y, sl.wMM, sl.hMM);
+  y += cl.hMM + 3;
+
+  // 教練：空白線
   doc.setDrawColor(187,187,187); doc.setLineWidth(0.5);
-  doc.line(ml, y+18, ml+cw, y+18);
-  y += 26;
+  doc.line(ml, y+30, ml+halfW, y+30);
 
-  // 學員確認標籤
-  const sl = textImg('學員確認',{fontSize:9, color:'#AAAAAA', fontWeight:'700', width:cw});
-  addImg(sl.dataUrl, ml, y, sl.wMM, sl.hMM);
-  y += sl.hMM + 3;
-
+  // 學員：等比例縮放，寬不超過 halfW，高不超過 35mm
   if(sigData){
-    // 計算原始 canvas 比例，讓寬度填滿可用寬，高度等比例
     const tmpImg = new Image();
     await new Promise(res=>{tmpImg.onload=res; tmpImg.src=sigData;});
     const ratio = tmpImg.naturalHeight / tmpImg.naturalWidth;
-    const sigW = cw; // 填滿整行
-    const sigH = sigW * ratio;
-    doc.addImage(sigData,'PNG', ml, y, sigW, sigH);
-    y += sigH + 6;
+    const maxW = halfW, maxH = 35;
+    let sigW = maxW, sigH = sigW * ratio;
+    if(sigH > maxH){ sigH = maxH; sigW = sigH / ratio; }
+    doc.addImage(sigData,'PNG', ml+halfW+8, y, sigW, sigH);
+    y += Math.max(33, sigH) + 6;
   } else {
-    const ns = textImg('尚未簽署',{fontSize:10, color:'#F9A825', fontWeight:'700', width:cw});
-    addImg(ns.dataUrl, ml, y, ns.wMM, ns.hMM);
-    y += ns.hMM + 6;
+    const ns = textImg('尚未簽署',{fontSize:10, color:'#F9A825', fontWeight:'700', width:halfW});
+    addImg(ns.dataUrl, ml+halfW+8, y+10, ns.wMM, ns.hMM);
+    y += 36;
   }
 
   // ── 頁尾 ──
