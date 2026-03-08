@@ -39,11 +39,22 @@ async function fetchCoachPin(){
   try{
     const res=await gasGet("getCoachPin");
     if(res&&res.hash){
-      setCoachPinCache(res.hash); // 更新快取
+      setCoachPinCache(res.hash);
       return res.hash;
     }
-  }catch{}
-  return getCoachPinCache(); // 網路失敗時用快取
+    // GAS 無密碼（第一次使用）→ 寫入預設 0000
+    const def=await hashPin("0000");
+    setCoachPinCache(def);
+    gasSync({action:"setCoachPin",hash:def});
+    return def;
+  }catch{
+    // 網路失敗時用快取，快取也沒有就用 0000
+    const cached=getCoachPinCache();
+    if(cached)return cached;
+    const def=await hashPin("0000");
+    setCoachPinCache(def);
+    return def;
+  }
 }
 
 // 儲存教練密碼 hash 到 GAS + 快取
