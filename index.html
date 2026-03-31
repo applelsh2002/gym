@@ -631,16 +631,49 @@ function StudentHome({students,records,onCheckinDone,onGoCoach,onRegister,syncin
 
           {pendingContracts.length>0&&(
             <div style={{background:"#FFF9C4",border:"1px solid #F9A825",borderRadius:14,padding:"14px 16px",marginBottom:14}}>
-              <div style={{fontSize:13,fontWeight:700,color:"#F57F17",marginBottom:8}}>⚠ 有合約待簽名</div>
-              {pendingContracts.map(c=>(
-                <div key={c.id} style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:6}}>
-                  <div style={{fontSize:13,color:"#555"}}>{c.paidDate||"未填日期"} · {c.total}堂</div>
-                  <button onClick={()=>{
-                    const sigState={};setContractSigMap(sigState);
-                  }} style={{background:"#F9A825",border:"none",color:"#fff",padding:"5px 12px",borderRadius:8,fontSize:12,fontWeight:700,cursor:"pointer"}}
-                  onClick={()=>onSignContract&&onSignContract(fresh,c.id,null)}>簽名</button>
-                </div>
-              ))}
+              <div style={{fontSize:13,fontWeight:700,color:"#F57F17",marginBottom:10}}>⚠ 有合約待簽名</div>
+              {pendingContracts.map(c=>{
+                const isSigningThis=activeMode==="sign_"+c.id;
+                return(
+                  <div key={c.id}>
+                    <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:isSigningThis?10:6}}>
+                      <div>
+                        <div style={{fontSize:13,color:"#555",fontWeight:600}}>{c.paidDate||"未填日期"} · {c.total} 堂</div>
+                        {c.note&&<div style={{fontSize:11,color:"#AAA",marginTop:2}}>{c.note}</div>}
+                      </div>
+                      {!isSigningThis&&(
+                        <button onClick={()=>{setActiveMode("sign_"+c.id);setContractSigMap({});}}
+                          style={{background:"#F9A825",border:"none",color:"#fff",padding:"6px 14px",borderRadius:9,fontSize:12,fontWeight:700,cursor:"pointer"}}>
+                          ✍ 簽名
+                        </button>
+                      )}
+                    </div>
+                    {isSigningThis&&(
+                      <div style={{background:"#fff",borderRadius:12,padding:"14px",marginBottom:8,border:"1px solid #F9A825"}}>
+                        <div style={{fontSize:12,color:"#888",marginBottom:10,lineHeight:1.7}}>
+                          請在下方簽名確認合約，簽名後無法修改。
+                        </div>
+                        <SignatureCanvas
+                          onSigned={sd=>setContractSigMap(prev=>({...prev,[c.id]:sd}))}
+                          label="合約簽名"
+                        />
+                        <div style={{display:"flex",gap:8,marginTop:12}}>
+                          <Btn variant="light" style={{flex:1}} onClick={()=>{setActiveMode(null);setContractSigMap({});}}>取消</Btn>
+                          <Btn
+                            style={{flex:2,background:"#F9A825"}}
+                            disabled={!contractSigMap[c.id]}
+                            onClick={()=>{
+                              onSignContract&&onSignContract(fresh,c.id,contractSigMap[c.id]);
+                              setActiveMode(null);
+                              setContractSigMap({});
+                            }}
+                          >✓ 確認簽署</Btn>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
 
@@ -653,9 +686,9 @@ function StudentHome({students,records,onCheckinDone,onGoCoach,onRegister,syncin
                 <Btn style={{flex:2}} onClick={()=>onCheckinDone(fresh,sigData)}>✓ 確認簽到</Btn>
               </div>
             </div>
-          ):(
+          ):(!activeMode&&(
             <Btn full onClick={()=>setActiveMode("checkin")}>今日簽到</Btn>
-          )}
+          ))}
 
           {myRecords.length>0&&(
             <div style={{marginTop:16}}>
