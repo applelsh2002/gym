@@ -102,12 +102,22 @@ async function gasGet(action){
     return await r.json();
   }catch(e){console.warn("gasGet:",e);return null;}
 }
-// gasSync 永遠不傳 sigData（base64 太大無法放 URL，Sheet 也不需要儲存）
+// gasSync 永遠不傳 sigData（base64 太大，Sheet 也不需要儲存）
+// 改用 POST body 避免 URL 長度限制，student 資料量大也不會截斷
 function gasSync(body){
   if(!GAS_URL)return;
   const clean=stripSigData(body);
-  const encoded=encodeURIComponent(JSON.stringify(clean));
-  fetch(GAS_URL+"?action=post&payload="+encoded,{method:"GET",mode:"no-cors",redirect:"follow"}).catch(()=>{});
+  fetch(GAS_URL,{
+    method:"POST",
+    mode:"no-cors",
+    redirect:"follow",
+    headers:{"Content-Type":"text/plain"},
+    body:JSON.stringify(clean)
+  }).catch(()=>{
+    // fallback: GET（資料量小的情況仍可用）
+    const encoded=encodeURIComponent(JSON.stringify(clean));
+    fetch(GAS_URL+"?action=post&payload="+encoded,{method:"GET",mode:"no-cors",redirect:"follow"}).catch(()=>{});
+  });
 }
 function stripSigData(obj){
   if(!obj||typeof obj!=="object")return obj;
